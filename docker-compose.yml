@@ -1,0 +1,65 @@
+services:
+
+  backend:
+    build: ./backend
+    ports: ["5000:5000"]
+    restart: always
+    volumes:
+      - ./shared:/app/shared
+      - ./oci_config:/root/.oci:ro
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+      - TZ=Asia/Jakarta
+    networks: [hub-net]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.4"
+          memory: 384M
+        reservations:
+          cpus: "0.05"
+          memory: 96M
+
+  worker:
+    build: ./backend
+    command: celery -A celery_worker.celery worker --loglevel=info --concurrency=1
+    restart: always
+    volumes:
+      - ./shared:/app/shared
+      - ./oci_config:/root/.oci:ro
+    env_file: .env
+    environment:
+      - PYTHONPATH=/app
+      - TZ=Asia/Jakarta
+    networks: [hub-net]
+    deploy:
+      resources:
+        # Chromium/Grafana screenshot capture was nearly maxing the old 512M
+        # limit (observed ~511MB in production), which throttles/slows the
+        # task instead of erroring outright. Host has headroom for this.
+        limits:
+          cpus: "0.8"
+          memory: 896M
+        reservations:
+          cpus: "0.05"
+          memory: 128M
+
+  frontend:
+    build: ./frontend
+    ports: ["3000:80"]
+    restart: always
+    depends_on: [backend]
+    networks: [hub-net]
+    deploy:
+      resources:
+        limits:
+          cpus: "0.2"
+          memory: 128M
+        reservations:
+          cpus: "0.02"
+          memory: 32M
+
+networks:
+  hub-net:
+    driver: bridge

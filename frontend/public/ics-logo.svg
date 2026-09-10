@@ -1,0 +1,19 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 320 140" fill="none">
+  <!-- Red square box ICS compute -->
+  <rect x="0" y="0" width="130" height="130" rx="8" fill="#CC0000"/>
+  <!-- ICS text -->
+  <text x="12" y="72" font-family="Arial Black, Arial, sans-serif" font-weight="900"
+    font-size="58" fill="white" letter-spacing="-2">ICS</text>
+  <!-- compute text -->
+  <text x="12" y="112" font-family="Arial, sans-serif" font-weight="400"
+    font-size="22" fill="white" letter-spacing="1">compute</text>
+
+  <!-- Re:Invent -->
+  <text x="148" y="52" font-family="Arial, sans-serif" font-weight="400"
+    font-size="36" fill="#CC0000" letter-spacing="-0.5">Re:<tspan font-style="italic">Invent</tspan></text>
+  <!-- Go:Beyond -->
+  <text x="148" y="92" font-family="Arial, sans-serif" font-weight="400"
+    font-size="36" fill="#CC0000" letter-spacing="-0.5">Go:<tspan font-style="italic">Beyond</tspan></text>
+  <!-- Arrow >> -->
+  <text x="242" y="128" font-family="Arial, sans-serif" font-size="22" fill="#CC0000">▷▶</text>
+</svg>

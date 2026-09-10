@@ -1,0 +1,15 @@
+.env
+*.pem
+oci_config/
+*.bak
+*.before-*
+backup-*/
+node_modules/
+dist/
+__pycache__/
+*.pyc
+shared/*
+!shared/template_grafana.pptx
+
+*.bak-*
+*.bak_*

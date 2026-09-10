@@ -1,0 +1,226 @@
+/* ══════════════════════════════════════════════════════════
+   PORTAL REPORT — ICS Compute
+   Global Design System — Dark / Light mode via CSS variables
+══════════════════════════════════════════════════════════ */
+*, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+/* ── Dark mode (default) ── */
+:root {
+  --bg:          #0A0A0A;
+  --bg2:         #141414;
+  --bg3:         #0D0D0D;
+  --bg4:         #111111;
+  --surface:     #141414;
+  --surface2:    #1C1C1C;
+  --surface3:    #242424;
+  --border:      #1E1E1E;
+  --border2:     #2A2A2A;
+  --border3:     #363636;
+
+  /* Text — semua tingkatan harus terbaca jelas di dark bg */
+  --text:        #F0F0F0;   /* heading utama */
+  --text2:       #E0E0E0;   /* body utama */
+  --text3:       #C8C8C8;   /* teks sekunder */
+  --text4:       #B0B0B0;   /* label/nilai tabel */
+  --muted:       #909090;   /* placeholder, meta info */
+  --muted2:      #707070;   /* hint, secondary meta */
+  --muted3:      #505050;   /* section label uppercase */
+  --muted4:      #363636;   /* border-like divider text */
+
+  --sidebar-bg:  #0D0D0D;
+  --sidebar-border: #1A1A1A;
+
+  --maroon:      #B11226;
+  --maroon2:     #8F0D1E;
+  --maroon3:     #7F0D1B;
+  --maroon-dim:  rgba(177,18,38,.12);
+  --maroon-glow: rgba(177,18,38,.25);
+
+  --green:       #22C55E;
+  --green-dim:   rgba(34,197,94,.12);
+  --red:         #EF4444;
+  --red-dim:     rgba(239,68,68,.12);
+  --amber:       #F59E0B;
+  --amber-dim:   rgba(245,158,11,.12);
+  --blue:        #3B82F6;
+  --blue-dim:    rgba(59,130,246,.12);
+
+  --row-alt:     rgba(255,255,255,.015);
+  --row-hover:   rgba(177,18,38,.06);
+
+  --font:  'Inter', system-ui, sans-serif;
+  --mono:  'JetBrains Mono', 'Fira Code', monospace;
+  --r:     8px;
+  --r2:    12px;
+}
+
+/* ── Light mode overrides ── */
+body.light {
+  --bg:          #F4F6FA;
+  --bg2:         #FFFFFF;
+  --bg3:         #EEF1F7;
+  --bg4:         #FAFBFD;
+  --surface:     #FFFFFF;
+  --surface2:    #F4F6FA;
+  --surface3:    #E8ECF4;
+  --border:      #E0E4EE;
+  --border2:     #CDD4E4;
+  --border3:     #B8C2D8;
+
+  /* Text — semua tingkatan harus terbaca jelas di light bg */
+  --text:        #0F1724;   /* heading utama */
+  --text2:       #1A2540;   /* body utama */
+  --text3:       #2D3A55;   /* teks sekunder */
+  --text4:       #3D4E6A;   /* label/nilai tabel */
+  --muted:       #566080;   /* placeholder, meta info */
+  --muted2:      #6B7A9A;   /* hint, secondary meta */
+  --muted3:      #8A97B8;   /* section label uppercase */
+  --muted4:      #CDD4E4;   /* border-like divider text */
+
+  --sidebar-bg:  #FFFFFF;
+  --sidebar-border: #E0E4EE;
+
+  --maroon-dim:  rgba(177,18,38,.08);
+  --maroon-glow: rgba(177,18,38,.10);
+
+  --green-dim:   rgba(34,197,94,.10);
+  --red-dim:     rgba(239,68,68,.10);
+  --amber-dim:   rgba(245,158,11,.10);
+  --blue-dim:    rgba(59,130,246,.10);
+
+  --row-alt:     rgba(0,0,0,.025);
+  --row-hover:   rgba(177,18,38,.05);
+}
+
+html, body, #root { height: 100%; }
+body {
+  font-family: var(--font);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 13px;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  transition: background .25s, color .25s;
+}
+
+::-webkit-scrollbar { width: 3px; height: 3px; }
+::-webkit-scrollbar-track { background: transparent; }
+::-webkit-scrollbar-thumb { background: var(--border3); border-radius: 2px; }
+
+/* ── Spinner ── */
+.spinner {
+  display: inline-block; width: 14px; height: 14px;
+  border: 2px solid currentColor; border-top-color: transparent;
+  border-radius: 50%; animation: spin .6s linear infinite;
+}
+@keyframes spin    { to { transform: rotate(360deg); } }
+@keyframes pulse   { 0%,100%{opacity:1} 50%{opacity:.35} }
+@keyframes slideIn { from { transform: translateY(20px); opacity:0; } to { transform: translateY(0); opacity:1; } }
+
+/* ── Modal ── */
+.modal-overlay {
+  position: fixed; inset: 0; background: rgba(0,0,0,.7);
+  display: flex; align-items: center; justify-content: center;
+  z-index: 400; backdrop-filter: blur(8px);
+}
+body.light .modal-overlay { background: rgba(0,0,0,.45); }
+
+.modal {
+  background: var(--surface);
+  border: 1px solid var(--border2);
+  border-radius: var(--r2);
+  width: 480px; max-width: 95vw;
+  box-shadow: 0 0 0 1px rgba(255,255,255,.03),
+              0 32px 80px rgba(0,0,0,.5),
+              0 0 60px var(--maroon-glow);
+  overflow: hidden;
+}
+.modal::before {
+  content: ''; display: block; height: 2px;
+  background: linear-gradient(90deg, var(--maroon), #ff2040, var(--maroon));
+}
+.modal-header {
+  display: flex; align-items: center; justify-content: space-between;
+  padding: 16px 20px; border-bottom: 1px solid var(--border);
+  font-size: 13px; font-weight: 600; color: var(--text2);
+}
+.modal-close {
+  background: none; border: none; color: var(--muted);
+  font-size: 16px; cursor: pointer; padding: 3px 6px;
+  border-radius: 4px; transition: all .15s;
+}
+.modal-close:hover { color: var(--text); background: var(--surface3); }
+.modal-body { padding: 20px; display: flex; flex-direction: column; gap: 12px; }
+.modal-note { font-size: 12px; color: var(--text4); line-height: 1.6; }
+
+/* ── Forms ── */
+.form-label {
+  display: block; font-size: 11px; font-weight: 500;
+  color: var(--text4); margin-bottom: 5px;
+}
+.form-input {
+  width: 100%; background: var(--surface2); border: 1px solid var(--border2);
+  color: var(--text); font-family: var(--font); font-size: 12px;
+  padding: 9px 12px; border-radius: var(--r); outline: none;
+  transition: border-color .15s;
+}
+.form-input:focus { border-color: var(--maroon); box-shadow: 0 0 0 3px var(--maroon-dim); }
+select.form-input option { background: var(--surface); color: var(--text); }
+
+.form-msg { font-size: 11px; padding: 8px 12px; border-radius: var(--r); }
+.form-msg.loading { background: var(--blue-dim);  color: #93c5fd; }
+.form-msg.done    { background: var(--green-dim); color: #86efac; }
+.form-msg.error   { background: var(--red-dim);   color: #fca5a5; }
+
+/* ── Buttons ── */
+.btn-primary {
+  width: 100%; background: var(--maroon); color: #fff; border: none;
+  font-family: var(--font); font-size: 12px; font-weight: 600;
+  padding: 10px 16px; border-radius: var(--r); cursor: pointer;
+  display: flex; align-items: center; justify-content: center; gap: 7px;
+  transition: all .15s; letter-spacing: .02em;
+}
+.btn-primary:hover:not(:disabled) { background: var(--maroon2); }
+.btn-primary:disabled { opacity: .4; cursor: not-allowed; }
+.btn-danger {
+  background: var(--red-dim); color: #fca5a5; border: 1px solid rgba(239,68,68,.2);
+  font-family: var(--font); font-size: 12px; font-weight: 500;
+  padding: 9px 16px; border-radius: var(--r); cursor: pointer; transition: all .15s;
+}
+.btn-danger:hover { background: var(--red); color: #fff; border-color: transparent; }
+
+/* ── OCI ── */
+.oci-status-ok { font-size: 12px; font-weight: 600; color: var(--green); }
+.oci-saved     { font-size: 11px; color: var(--muted); }
+.btn-refresh {
+  background: none; border: 1px solid var(--border); color: var(--muted);
+  font-size: 11px; padding: 3px 9px; border-radius: 5px;
+  cursor: pointer; font-family: var(--font); transition: all .15s;
+}
+.btn-refresh:hover { color: var(--text); border-color: var(--border2); }
+
+/* ── Sidebar ── */
+.app-sidebar {
+  background: #0D0D0D;
+  transition: background .25s, border-color .25s;
+}
+body.light .app-sidebar {
+  background: #FFFFFF;
+}
+
+/* Sidebar nav text colors for light mode */
+body.light .app-sidebar .sb-nav-btn {
+  color: #485470;
+}
+body.light .app-sidebar .sb-section-label {
+  color: #B0BAD0;
+}
+body.light .app-sidebar .sb-logo-name {
+  color: #0F1724;
+}
+body.light .app-sidebar .sb-logo-sub {
+  color: #6B7A9A;
+}
+body.light .app-sidebar .sb-oci-text {
+  color: #6B7A9A;
+}
