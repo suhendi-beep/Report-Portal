@@ -7,56 +7,24 @@ let alertAudioContext = null;
 
 function playAlertSound() {
   if (isAlertMuted()) return;
-
   try {
-    const AudioCtx = window.AudioContext || window.webkitAudioContext;
-    if (!AudioCtx) return;
-
-    if (!alertAudioContext) {
-      alertAudioContext = new AudioCtx();
-    }
-
-    const ctx = alertAudioContext;
-
-    if (ctx.state === "suspended") {
-      ctx.resume().catch(() => {});
-    }
-
-    const now = ctx.currentTime;
-
-    // Alarm panjang: 4 beep per rangkaian, diulang 2x.
-    // Total sekitar 6-7 detik.
-    const beepOffsets = [
-      0.00, 0.75, 1.50, 2.25,
-      3.25, 4.00, 4.75, 5.50
-    ];
-
-    beepOffsets.forEach((offset) => {
-      const osc = ctx.createOscillator();
-      const gain = ctx.createGain();
-
-      osc.type = "square";
-      osc.frequency.setValueAtTime(1100, now + offset);
-
-      gain.gain.setValueAtTime(0.0001, now + offset);
-      gain.gain.exponentialRampToValueAtTime(
-        0.55,
-        now + offset + 0.03
-      );
-      gain.gain.exponentialRampToValueAtTime(
-        0.0001,
-        now + offset + 0.55
-      );
-
-      osc.connect(gain);
-      gain.connect(ctx.destination);
-
-      osc.start(now + offset);
-      osc.stop(now + offset + 0.60);
+    const audio = new Audio("/warning.mp3");
+    audio.onerror = () => { new Audio("/alert.mp3").play().catch(()=>{}); };
+    audio.volume = 0.8;
+    audio.play().catch(() => {
+      try {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        const ctx = new AC();
+        const osc = ctx.createOscillator(); const g = ctx.createGain();
+        osc.type = "square"; osc.frequency.value = 880;
+        g.gain.setValueAtTime(0.3, ctx.currentTime);
+        g.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + 0.5);
+        osc.connect(g); g.connect(ctx.destination);
+        osc.start(); osc.stop(ctx.currentTime + 0.5);
+      } catch(e2) {}
     });
-  } catch (err) {
-    console.warn("[ALERT SOUND] gagal:", err);
-  }
+  } catch(err) { console.warn("[ALERT SOUND]", err); }
 }
 
 
@@ -280,8 +248,8 @@ ${lines}
 Mohon untuk segera ditindaklanjuti. Terima kasih.`;
 }
 
-/* ─── Laporkan Modal ─────────────────────────────────── */
-function LaporkanModal({ alert, alreadyEskalasi, onClose, onEskalasi }) {
+/* ─── Report Modal ─────────────────────────────────── */
+function ReportModal({ alert, alreadyEskalasi, onClose, onEskalasi }) {
   const [copied, setCopied] = useState(false);
   const [ticket, setTicket] = useState("");
 
@@ -315,7 +283,7 @@ function LaporkanModal({ alert, alreadyEskalasi, onClose, onEskalasi }) {
     loggedRef.current = true;
     onEskalasi(alert._key, alert);
     logActivity(
-      "Laporkan Alert",
+      "Report Alert",
       "alert",
       [
         `Ticket: ${ticket}`,
@@ -356,8 +324,8 @@ function LaporkanModal({ alert, alreadyEskalasi, onClose, onEskalasi }) {
           background:"var(--bg3)" }}>
           <span style={{ fontSize:14 }}>📣</span>
           <div style={{ flex:1 }}>
-            <div style={{ fontSize:12, fontWeight:700, color:"var(--text2)" }}>Laporkan Alert</div>
-            <div style={{ fontSize:10, color:"var(--muted)", marginTop:1 }}>Copy template lalu kirim ke tim</div>
+            <div style={{ fontSize:12, fontWeight:700, color:"var(--text2)" }}>Report Alert</div>
+            <div style={{ fontSize:10, color:"var(--muted)", marginTop:1 }}>Copy template and send to team</div>
           </div>
           <button onClick={onClose}
             style={{ background:"none", border:"none", color:"var(--muted)",
@@ -435,13 +403,13 @@ function LaporkanModal({ alert, alreadyEskalasi, onClose, onEskalasi }) {
               fontFamily:"inherit", fontSize:12, fontWeight:600,
               padding:"9px 0", cursor:"pointer", transition:"background .2s",
               display:"flex", alignItems:"center", justifyContent:"center", gap:6 }}>
-            {copied ? "✓ Berhasil Dilaporkan!" : "📣 Laporkan"}
+            {copied ? "✓ Reported!" : "📣 Report"}
           </button>
           <button onClick={onClose}
             style={{ background:"var(--surface2)", border:"1px solid var(--border2)",
               borderRadius:6, color:"var(--muted)", fontFamily:"inherit",
               fontSize:12, padding:"9px 16px", cursor:"pointer" }}>
-            Tutup
+            Close
           </button>
         </div>
       </div>
@@ -461,12 +429,13 @@ function labelColor(key) {
 }
 
 /* ─── Alert Row ──────────────────────────────────────── */
-function AlertRow({ a, isNew, eskalasi, onLaporkan }) {
+function AlertRow({ a, isNew, eskalasi, dismissed, onReport, onDismiss }) {
   const [expanded, setExpanded] = useState(false);
   const fc      = folderColor(a.folder);
   const sev     = getSeverity(a.name, a.severity);
   const sc      = SEV_COLOR[sev];
-  const done    = eskalasi.has(a._key);
+  const done       = eskalasi.has(a._key);
+  const isDismissed = dismissed ? dismissed.has(a._key) : false;
   const isOld   = a.duration_min > 720;
   const labels  = a.labels || {};
   // Label paling penting tampil langsung, sisanya di expand
@@ -578,22 +547,38 @@ function AlertRow({ a, isNew, eskalasi, onLaporkan }) {
 
         {/* action */}
         <td style={{ padding:"8px 10px", verticalAlign:"top", paddingTop:8, textAlign:"right" }}>
-          {done ? (
+          {isDismissed ? (
+            <span style={{ fontSize:10,color:"var(--muted3)",fontWeight:600,
+              display:"flex",alignItems:"center",gap:4,justifyContent:"flex-end" }}>
+              <span>x</span> Dismissed
+            </span>
+          ) : done ? (
             <span style={{ fontSize:10,color:"#22C55E",fontWeight:600,
               display:"flex",alignItems:"center",gap:4,justifyContent:"flex-end" }}>
-              <span>✓</span> Dieskalasikan
+              <span>v</span> Escalated
             </span>
           ) : (
-            <button onClick={()=>onLaporkan(a)}
-              style={{ background:isOld?"rgba(60,30,30,.4)":"rgba(177,18,38,.15)",
-                border:isOld?"1px solid #3A1A1A":"1px solid #B11226",
-                borderRadius:5,color:isOld?"#5A3A3A":"#F87171",
-                fontFamily:"inherit",fontSize:10,fontWeight:600,
-                padding:"4px 10px",cursor:"pointer",whiteSpace:"nowrap" }}
-              onMouseEnter={e=>e.currentTarget.style.background=isOld?"rgba(60,30,30,.7)":"rgba(177,18,38,.3)"}
-              onMouseLeave={e=>e.currentTarget.style.background=isOld?"rgba(60,30,30,.4)":"rgba(177,18,38,.15)"}>
-              📣 Laporkan
-            </button>
+            <div style={{ display:"flex",gap:4,justifyContent:"flex-end" }}>
+              <button onClick={()=>onReport(a)}
+                style={{ background:isOld?"rgba(60,30,30,.4)":"rgba(177,18,38,.15)",
+                  border:isOld?"1px solid #3A1A1A":"1px solid #B11226",
+                  borderRadius:5,color:isOld?"#5A3A3A":"#F87171",
+                  fontFamily:"inherit",fontSize:10,fontWeight:600,
+                  padding:"4px 8px",cursor:"pointer",whiteSpace:"nowrap" }}
+                onMouseEnter={e=>e.currentTarget.style.background=isOld?"rgba(60,30,30,.7)":"rgba(177,18,38,.3)"}
+                onMouseLeave={e=>e.currentTarget.style.background=isOld?"rgba(60,30,30,.4)":"rgba(177,18,38,.15)"}>
+                Report
+              </button>
+              <button onClick={()=>onDismiss(a)}
+                title="Dismiss - Cancelled, no ticket"
+                style={{ background:"rgba(100,100,120,.1)",border:"1px solid rgba(100,100,120,.3)",
+                  borderRadius:5,color:"var(--muted)",fontFamily:"inherit",fontSize:10,fontWeight:600,
+                  padding:"4px 8px",cursor:"pointer",whiteSpace:"nowrap" }}
+                onMouseEnter={e=>e.currentTarget.style.background="rgba(100,100,120,.25)"}
+                onMouseLeave={e=>e.currentTarget.style.background="rgba(100,100,120,.1)"}>
+                Dismiss
+              </button>
+            </div>
           )}
         </td>
       </tr>
@@ -1127,7 +1112,7 @@ function DailyReportModal({ alerts, onClose }) {
             style={{ background:"var(--surface2)", border:"1px solid var(--border2)",
               borderRadius:6, color:"var(--muted)", fontFamily:"inherit",
               fontSize:12, padding:"9px 16px", cursor:"pointer" }}>
-            Tutup
+            Close
           </button>
         </div>
       </div>
@@ -1136,7 +1121,7 @@ function DailyReportModal({ alerts, onClose }) {
 }
 
 /* ─── Alert Table (reusable section) ────────────────── */
-function AlertTable({ alerts, newSet, eskalasi, onLaporkan, title, titleColor, headerBg, dim }) {
+function AlertTable({ alerts, newSet, eskalasi, dismissed, onReport, onDismiss, title, titleColor, headerBg, dim }) {
   const [open, setOpen] = useState(true);
   return (
     <div style={{ marginTop:14, border:`1px solid ${dim?"#1E0A0A":"var(--border)"}`,
@@ -1183,7 +1168,9 @@ function AlertTable({ alerts, newSet, eskalasi, onLaporkan, title, titleColor, h
               <AlertRow key={i} a={a}
                 isNew={newSet.has(a._key)}
                 eskalasi={eskalasi}
-                onLaporkan={onLaporkan}/>
+                dismissed={dismissed}
+                onReport={onReport}
+                onDismiss={onDismiss}/>
             ))}
           </tbody>
         </table>
@@ -1237,7 +1224,7 @@ async function createTaskFromAlert(alert) {
   const alertKey = alert._key || `${alert.name}||${alert.resource}||${alert.active_at}`;
   const ticket   = await getOrCreateTicket(alertKey);
   // Alert otomatis masuk sebagai Pending tanpa PIC.
-  // PIC baru diisi ketika engineer benar-benar klik "Laporkan".
+  // PIC baru diisi ketika engineer benar-benar klik "Report".
   const pic      = "";
   const task     = {
     id:          `alert_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
@@ -1352,6 +1339,7 @@ export default function AlertPage() {
   // eskalasi: Set of _key strings — shared di backend supaya semua
   // engineer melihat alert yang sudah dilaporkan oleh siapa pun.
   const [eskalasi, setEskalasi] = useState(() => new Set());
+  const [dismissed, setDismissed] = useState(() => new Set());
   // Track alert _key yang sudah dibuat task — hindari duplikat
   const [alertTaskIds, setAlertTaskIds] = useState(() => {
     try { return new Set(JSON.parse(localStorage.getItem(ALERT_TASK_KEY)||"[]")); }
@@ -1376,7 +1364,7 @@ export default function AlertPage() {
         // yang boleh masuk Alert Monitor dan Daily Task.
         // Filter dilakukan SEBELUM setAllAlerts() agar auto-sync
         // tidak pernah melihat alert yang masih < 5 menit.
-        const alerts = rawAlerts.filter(a => Number(a.duration_min || 0) > 5);
+        const alerts = rawAlerts.filter(a => { const dur=Number(a.duration_min||0); const st=(a.state||"").toLowerCase(); return dur>5 && st!=="pending" && st!=="nodata" && a.state!=="NoData"; });
 
         // Bunyi hanya untuk alert yang benar-benar baru muncul,
         // bukan setiap polling 30 detik.
@@ -1435,7 +1423,7 @@ export default function AlertPage() {
       body: JSON.stringify({ key, by }),
     }).catch(() => {});
 
-    // Daily Task BARU dibuat saat engineer klik "Laporkan".
+    // Daily Task BARU dibuat saat engineer klik "Report".
     if (!alert) return;
 
     const resource = alert.resource && alert.resource !== "-" ? ` → ${alert.resource}` : "";
@@ -1482,6 +1470,34 @@ export default function AlertPage() {
     } catch (err) {
       console.error("[LAPORKAN → TASK] gagal:", err);
     }
+  };
+
+  const markDismiss = async (alert) => {
+    if (!alert) return;
+    const key = alert._key;
+    setDismissed(prev => new Set(prev).add(key));
+    const by = sessionStorage.getItem("pr_display") || sessionStorage.getItem("pr_user") || "";
+    const resource = alert.resource && alert.resource !== "-" ? " -> " + alert.resource : "";
+    const desc = "[ALERT] " + shortName(alert.name) + resource;
+    const folder = folderDisplay(alert.folder);
+    try {
+      const allTasks = await fetch("/api/tasks").then(r=>r.json());
+      if (!Array.isArray(allTasks)) return;
+      const existing = allTasks.find(t => t.description===desc && t.status!=="Close" && t.status!=="Cancelled");
+      if (existing) {
+        await taskApiUpdate(existing.id, { status:"Cancelled", end:timeWIB(), pic:by||"Dismissed" });
+      } else {
+        await taskApiCreate({
+          id: "alert_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),
+          customer: folder, description: desc, alertKey: key,
+          date: todayWIB(), start: timeWIB(), end: timeWIB(),
+          pic: by||"Dismissed", status: "Cancelled",
+          detail: "Severity: "+(alert.severity||"-")+"\nDuration: "+fmtDur(alert.duration_min)+"\nSince: "+fmtTime(alert.active_at)+"\nFolder: "+folder+"\nAction: Dismissed by "+(by||"engineer"),
+          createdAt: new Date().toISOString(),
+        });
+      }
+      logActivity("Dismiss Alert", "task", desc+" dismissed by "+(by||"engineer"));
+    } catch(err) { console.error("[DISMISS]", err); }
   };
 
   // Stay in sync if mute is toggled from elsewhere (e.g. another tab/page).
@@ -1619,7 +1635,7 @@ export default function AlertPage() {
           { label:"Firing (> 5m)",  value: withKey.length,                                                                  color:"#EF4444" },
           { label:"Active < 12h",  value: activeAlerts.length,                                                             color:"#EF4444" },
           { label:"New (5–30m)",   value: newSet.size,                                                                     color:"#F87171" },
-          { label:"Dieskalasikan", value: [...eskalasi].filter(k=>withKey.find(a=>a._key===k)).length,                     color:"#22C55E" },
+          { label:"Escalated", value: [...eskalasi].filter(k=>withKey.find(a=>a._key===k)).length,                     color:"#22C55E" },
           { label:"> 12 Jam",      value: oldAlerts.length,                                                                color:"#6B3A3A", dim:true },
         ].map(s => (
           <div key={s.label} style={{ background: s.dim ? "var(--bg3)" : "var(--bg2)",
@@ -1640,7 +1656,7 @@ export default function AlertPage() {
         background:"var(--bg)" }}>
         {loading && !allAlerts.length ? (
           <div style={{ textAlign:"center", color:"var(--muted2)", paddingTop:60, fontSize:12 }}>
-            Memuat alerts…
+            Loading alerts…
           </div>
         ) : withKey.length === 0 ? (
           <div style={{ textAlign:"center", paddingTop:60 }}>
@@ -1653,7 +1669,7 @@ export default function AlertPage() {
             {activeAlerts.length > 0 && (
               <AlertTable
                 alerts={activeAlerts} newSet={newSet}
-                eskalasi={eskalasi} onLaporkan={setModal}
+                eskalasi={eskalasi} dismissed={dismissed} onReport={setModal} onDismiss={markDismiss}
                 title={`Active Alerts  (< 12 jam) — ${activeAlerts.length} firing`}
                 titleColor="#EF4444"
                 headerBg="var(--bg3)"
@@ -1664,7 +1680,7 @@ export default function AlertPage() {
             {oldAlerts.length > 0 && (
               <AlertTable
                 alerts={oldAlerts} newSet={newSet}
-                eskalasi={eskalasi} onLaporkan={setModal}
+                eskalasi={eskalasi} dismissed={dismissed} onReport={setModal} onDismiss={markDismiss}
                 title={`Long Running  (> 12 jam) — ${oldAlerts.length} alert`}
                 titleColor="#6B3A3A"
                 headerBg="#0A0505"
@@ -1675,9 +1691,9 @@ export default function AlertPage() {
         )}
       </div>
 
-      {/* ── Laporkan Modal ── */}
+      {/* ── Report Modal ── */}
       {modal && (
-        <LaporkanModal
+        <ReportModal
           alert={modal}
           alreadyEskalasi={eskalasi.has(modal._key)}
           onClose={() => setModal(null)}

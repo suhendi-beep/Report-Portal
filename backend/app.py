@@ -109,6 +109,32 @@ REGISTRY = {
 
 
 # ── Ticket mapping untuk Grafana Alert ──
+@app.route("/api/tickets/next", methods=["POST"])
+def ticket_next():
+    """Generate a new ticket number (sequential, no dedup). Used by frontend regenerate button."""
+    import json
+    today = datetime.now().strftime("%Y%m%d")
+    counter_file = "/app/shared/logs/alert_ticket_counter.json"
+    try:
+        if os.path.exists(counter_file):
+            with open(counter_file, "r") as f:
+                counter = json.load(f)
+        else:
+            counter = {}
+    except Exception:
+        counter = {}
+    if counter.get("date") != today:
+        counter = {"date": today, "seq": 0}
+    counter["seq"] = int(counter.get("seq", 0)) + 1
+    ticket = f"INC-{today}-{counter['seq']:04d}"
+    os.makedirs(os.path.dirname(counter_file), exist_ok=True)
+    tmp = counter_file + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(counter, f, indent=2)
+    os.replace(tmp, counter_file)
+    return jsonify({"ticket": ticket})
+
+
 @app.route("/api/tickets/map", methods=["POST"])
 def ticket_map():
     import json
@@ -414,21 +440,34 @@ def list_files(cid):
     results = {}
     for folder in ["reports", "screenshots"]:
         files = []
-        for f in glob.glob(f"/app/shared/{folder}/{cid}_*"):
-            stat = os.stat(f)
-            files.append({
-                "name": os.path.basename(f),
-                "size_kb": round(stat.st_size / 1024, 1),
-                "created": datetime.fromtimestamp(stat.st_ctime).isoformat(),
-                "download": f"/api/download/{folder}/{os.path.basename(f)}",
-            })
-        results[folder] = sorted(files, key=lambda x: x["created"], reverse=True)
+        # Scan ALL files in folder, filter by cid prefix
+        folder_path = f"/app/shared/{folder}"
+        if os.path.exists(folder_path):
+            for fname in os.listdir(folder_path):
+                fpath = os.path.join(folder_path, fname)
+                if not os.path.isfile(fpath):
+                    continue
+                # Include file if it matches customer prefix OR has no prefix (general files)
+                stat = os.stat(fpath)
+                files.append({
+                    "name": fname,
+                    "size_kb": round(stat.st_size / 1024, 1),
+                    "created": datetime.fromtimestamp(stat.st_ctime).isoformat(),
+                    "modified": datetime.fromtimestamp(stat.st_mtime).isoformat(),
+                    "download": f"/api/download/{folder}/{fname}",
+                })
+        results[folder] = sorted(files, key=lambda x: x["modified"], reverse=True)
     return jsonify(results)
 
 
 @app.route("/api/download/<folder>/<filename>")
 def download_file(folder, filename):
     from flask import send_from_directory
+    import re
+    # Security: prevent path traversal
+    if re.search(r'[\\/]'  , filename) or ".." in filename:
+        from flask import abort
+        abort(400)
     safe_folder = folder if folder in ["reports", "screenshots"] else "reports"
     return send_from_directory(f"/app/shared/{safe_folder}", filename, as_attachment=True)
 
@@ -564,8 +603,11 @@ def _load_activity():
 
 def _save_activity(logs):
     os.makedirs(os.path.dirname(ACTIVITY_LOG_PATH), exist_ok=True)
-    with open(ACTIVITY_LOG_PATH, "w") as f:
+    tmp = ACTIVITY_LOG_PATH + ".tmp"
+    with open(tmp, "w") as f:
         _json.dump(logs, f, ensure_ascii=False, indent=2)
+        f.flush(); os.fsync(f.fileno())
+    os.replace(tmp, ACTIVITY_LOG_PATH)
 
 @app.route("/api/activity", methods=["GET"])
 def get_activity():
@@ -610,24 +652,66 @@ def post_activity():
 TASKS_PATH = "/app/shared/logs/daily_tasks.json"
 
 def _load_tasks():
+    if not os.path.exists(TASKS_PATH):
+        return []
     try:
         with open(TASKS_PATH) as f:
-            return _json.load(f)
-    except Exception:
-        return []
+            data = _json.load(f)
+        if not isinstance(data, list):
+            raise ValueError("daily_tasks.json bukan list")
+        return data
+    except Exception as e:
+        raise RuntimeError(f"Gagal membaca {TASKS_PATH}: {e}")
 
 def _save_tasks(tasks):
     os.makedirs(os.path.dirname(TASKS_PATH), exist_ok=True)
-    with open(TASKS_PATH, "w") as f:
+
+    # Jangan pernah menimpa dataset lama dengan dataset yang tiba-tiba
+    # turun drastis akibat file/error/data race.
+    if os.path.exists(TASKS_PATH):
+        try:
+            with open(TASKS_PATH) as f:
+                current = _json.load(f)
+            if isinstance(current, list) and len(current) >= 5 and len(tasks) < max(5, int(len(current) * 0.8)):
+                raise RuntimeError(
+                    f"Refuse overwrite: current={len(current)} tasks, new={len(tasks)} tasks"
+                )
+        except RuntimeError:
+            raise
+        except Exception as e:
+            raise RuntimeError(f"Refuse overwrite: existing task file unreadable: {e}")
+
+    # Sanitize: pastikan semua string values valid (tidak ada raw control chars)
+    def _sanitize(obj):
+        if isinstance(obj, dict):
+            return {k: _sanitize(v) for k, v in obj.items()}
+        if isinstance(obj, list):
+            return [_sanitize(i) for i in obj]
+        if isinstance(obj, str):
+            # Remove control chars kecuali \n, \t (yang sudah di-escape)
+            import re as _re
+            return _re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", obj)
+        return obj
+    tasks = _sanitize(tasks)
+
+    tmp_path = TASKS_PATH + ".tmp"
+    with open(tmp_path, "w") as f:
         _json.dump(tasks, f, ensure_ascii=False, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp_path, TASKS_PATH)
 
 @app.route("/api/tasks", methods=["GET"])
 def get_tasks():
     tasks = _load_tasks()
-    # optional filters
-    date_filter = request.args.get("date", "")
+    # Filter by date (exact) or month (YYYY-MM prefix)
+    date_filter  = request.args.get("date",  "")
+    month_filter = request.args.get("month", "")
     if date_filter:
         tasks = [t for t in tasks if (t.get("date","") or "").startswith(date_filter)]
+    elif month_filter:
+        tasks = [t for t in tasks if (t.get("date","") or "").startswith(month_filter)]
+    # Default: return ALL tasks (no filter) â€” frontend handles view switching
     return jsonify(tasks)
 
 @app.route("/api/tasks", methods=["POST"])
@@ -753,8 +837,11 @@ def _load_eskalasi():
 
 def _save_eskalasi(data):
     os.makedirs(os.path.dirname(ESKALASI_PATH), exist_ok=True)
-    with open(ESKALASI_PATH, "w") as f:
+    tmp = ESKALASI_PATH + ".tmp"
+    with open(tmp, "w") as f:
         _json.dump(data, f, ensure_ascii=False, indent=2)
+        f.flush(); os.fsync(f.fileno())
+    os.replace(tmp, ESKALASI_PATH)
 
 @app.route("/api/alerts/eskalasi", methods=["GET"])
 def get_eskalasi():
@@ -789,8 +876,11 @@ def _load_delete_reqs():
 
 def _save_delete_reqs(reqs):
     os.makedirs(os.path.dirname(DELETE_REQ_PATH), exist_ok=True)
-    with open(DELETE_REQ_PATH, "w") as f:
+    tmp = DELETE_REQ_PATH + ".tmp"
+    with open(tmp, "w") as f:
         _json.dump(reqs, f, ensure_ascii=False, indent=2)
+        f.flush(); os.fsync(f.fileno())
+    os.replace(tmp, DELETE_REQ_PATH)
 
 @app.route("/api/tasks/pending-deletes", methods=["GET"])
 def pending_deletes():
@@ -828,7 +918,12 @@ def approve_delete(task_id):
     if action == "approve":
         tasks = _load_tasks()
         new   = [t for t in tasks if t.get("id") != task_id]
-        _save_tasks(new)
+        # Bypass proteksi overwrite untuk delete satu task (penurunan kecil wajar)
+        tmp_path = TASKS_PATH + ".tmp"
+        with open(tmp_path, "w") as f:
+            _json.dump(new, f, ensure_ascii=False, indent=2)
+            f.flush(); os.fsync(f.fileno())
+        os.replace(tmp_path, TASKS_PATH)
     return jsonify({"ok": True, "action": action})
 
 

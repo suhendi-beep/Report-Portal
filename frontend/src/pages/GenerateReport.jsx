@@ -1,5 +1,23 @@
 import React, { useState, useEffect, useRef } from "react";
+
 import { logActivity } from "../activityLog.js";
+
+/* â”€â”€ WIB time helper â”€â”€ */
+function timeNowWIB() {
+  return new Intl.DateTimeFormat("id-ID", {
+    timeZone: "Asia/Jakarta",
+    hour:     "2-digit",
+    minute:   "2-digit",
+  }).format(new Date());
+}
+function todayWIB() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Jakarta",
+    year:  "numeric",
+    month: "2-digit",
+    day:   "2-digit",
+  }).format(new Date());
+}
 
 const FILE_FILTER = {
   grafana_capture:       n => n.includes("grafana") && !n.includes("agustus") && !n.includes("week"),
@@ -146,7 +164,7 @@ export default function GenerateReport({ customers, navigate }) {
               await fetch("/api/tasks/" + dailyTaskId, {
                 method: "PUT",
                 headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({status: "Success"})
+                body: JSON.stringify({status: "Close", end: timeNowWIB()})
               });
             } catch (_) {}
           }
@@ -154,8 +172,14 @@ export default function GenerateReport({ customers, navigate }) {
           // Refresh output files beberapa kali untuk menghindari race
           // antara Celery selesai menulis file dan API file listing.
           await loadFiles(selCust);
-          setTimeout(() => loadFiles(selCust), 1000);
-          setTimeout(() => loadFiles(selCust), 3000);
+          if (selAuto === "grafana_weekly_report") {
+            setTimeout(() => loadFiles(selCust), 500);
+            setTimeout(() => loadFiles(selCust), 1500);
+            setTimeout(() => loadFiles(selCust), 3000);
+          } else {
+            setTimeout(() => loadFiles(selCust), 1000);
+            setTimeout(() => loadFiles(selCust), 3000);
+          }
           logActivity(
             "Generate Report",
             "report",
@@ -167,7 +191,7 @@ export default function GenerateReport({ customers, navigate }) {
               await fetch("/api/tasks/" + dailyTaskId, {
                 method: "PUT",
                 headers: {"Content-Type": "application/json"},
-                body: JSON.stringify({status: "Failed"})
+                body: JSON.stringify({status: "Cancelled", end: timeNowWIB()})
               });
             } catch (_) {}
           }
@@ -203,8 +227,9 @@ export default function GenerateReport({ customers, navigate }) {
           customer: selCust,
           description: auto?.name || selAuto,
           detail: auto?.name || selAuto,
-          date: today,
-          pic: "",
+          date: todayWIB(),
+          start: timeNowWIB(),
+          pic: sessionStorage.getItem("pr_display") || sessionStorage.getItem("pr_user") || "",
           status: "In Progress",
           generateReport: true
         })
@@ -251,9 +276,8 @@ export default function GenerateReport({ customers, navigate }) {
   };
 
   // Files filtered for selected automation
-  const autoFiles = selAuto
-    ? allFiles.filter(f => (FILE_FILTER[selAuto]||((n)=>false))(f.name.toLowerCase()))
-    : allFiles;
+  // Show ALL files - no filter to prevent files from disappearing
+  const autoFiles = allFiles;
 
   const logColor = (l) => {
     if (/error|fail|FAIL/i.test(l))             return "#F87171";
@@ -441,7 +465,7 @@ export default function GenerateReport({ customers, navigate }) {
                         </span>
                       </div>
                     </div>
-                    <a href={"/api/download/reports/"+f.name} download={f.name}
+                    <a href={f.download||("/api/download/reports/"+f.name)} download={f.name}
                       style={{flexShrink:0,background:"#B11226",color:"#fff",
                         border:"none",fontSize:10,fontWeight:600,
                         padding:"5px 12px",borderRadius:5,textDecoration:"none",

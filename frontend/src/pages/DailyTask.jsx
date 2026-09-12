@@ -15,11 +15,7 @@ const STATUS_STYLE    = {
 const apiGet = () =>
   fetch("/api/tasks")
     .then(r => r.json())
-    .then(tasks =>
-      Array.isArray(tasks)
-        ? tasks.filter(t => String(t?.start || "").trim() !== "")
-        : []
-    );
+    .then(tasks => Array.isArray(tasks) ? tasks : []);
 const apiCreate = (task)        => fetch("/api/tasks",            { method:"POST",   headers:{"Content-Type":"application/json"}, body:JSON.stringify(task)   }).then(r => r.json());
 const apiUpdate = (id, changes) => fetch(`/api/tasks/${id}`,      { method:"PUT",    headers:{"Content-Type":"application/json"}, body:JSON.stringify(changes)}).then(r => r.json());
 const apiDelete = (id)          => fetch(`/api/tasks/${id}`,      { method:"DELETE" }).then(r => r.json());
@@ -125,8 +121,13 @@ export default function DailyTask({ customers }) {
   const [showDownload,   setShowDownload]   = useState(false);
   const [pendingDeletes, setPendingDeletes] = useState([]); // [{task_id, task_desc, requested_by, ...}]
   const [showPending,    setShowPending]    = useState(false);
+  const [viewMode,       setViewMode]       = useState("today"); // "today" | "month" | "all"
+  const [searchQ,        setSearchQ]        = useState("");
+  const [currentPage,    setCurrentPage]    = useState(1);
+  const PAGE_SIZE = 10;
 
   const today = new Date().toISOString().split("T")[0];
+  const thisMonth = today.slice(0, 7); // YYYY-MM
 
   /* ── Load tasks dari API ── */
   const loadTasks = useCallback(async () => {
@@ -212,11 +213,33 @@ export default function DailyTask({ customers }) {
 
   /* ── Filtered ── */
   const filtered = tasks.filter(t => {
+    // View mode filter
+    if (viewMode === "today"  && (t.date || "").slice(0,10) !== today)       return false;
+    if (viewMode === "month"  && (t.date || "").slice(0,7)  !== thisMonth)   return false;
+    // Additional filters
     if (filterDate && t.date !== filterDate) return false;
     if (filterCust && t.customer !== filterCust) return false;
     if (filterSt   && t.status  !== filterSt)   return false;
+    // Search
+    if (searchQ) {
+      const q = searchQ.toLowerCase();
+      const inDesc = (t.description||"").toLowerCase().includes(q);
+      const inCust = (t.customer||"").toLowerCase().includes(q);
+      const inDetail = (t.detail||"").toLowerCase().includes(q);
+      const inPic  = (t.pic||"").toLowerCase().includes(q);
+      const inTicket = (t.detail||"").toLowerCase().includes(q);
+      if (!inDesc && !inCust && !inDetail && !inPic && !inTicket) return false;
+    }
     return true;
   });
+
+  // Pagination
+  const totalPages  = Math.max(1, Math.ceil(filtered.length / PAGE_SIZE));
+  const safePage    = Math.min(currentPage, totalPages);
+  const paginated   = filtered.slice((safePage-1)*PAGE_SIZE, safePage*PAGE_SIZE);
+
+  // Reset ke page 1 saat filter/search/viewMode berubah
+  React.useEffect(() => { setCurrentPage(1); }, [viewMode, filterDate, filterCust, filterSt, searchQ]);
 
   const total      = tasks.length;
   const done       = tasks.filter(t=>t.status==="Close").length;
@@ -257,6 +280,25 @@ export default function DailyTask({ customers }) {
         </div>
       </div>
 
+      {/* ── VIEW MODE TABS ── */}
+      <div style={{display:"flex",gap:6,marginBottom:12}}>
+        {[
+          {key:"today", label:`Today (${tasks.filter(t=>(t.date||"").slice(0,10)===today).length})`},
+          {key:"month", label:`This Month (${tasks.filter(t=>(t.date||"").slice(0,7)===thisMonth).length})`},
+          {key:"all",   label:`All (${tasks.length})`},
+        ].map(tab => (
+          <button key={tab.key} onClick={()=>{ setViewMode(tab.key); setFilterDate(""); setFilterCust(""); setFilterSt(""); }}
+            style={{
+              padding:"7px 18px", borderRadius:6, cursor:"pointer",
+              fontFamily:"inherit", fontSize:11, fontWeight:600,
+              background: viewMode===tab.key ? "#B11226" : "var(--surface2)",
+              border: viewMode===tab.key ? "1px solid #B11226" : "1px solid var(--border2)",
+              color: viewMode===tab.key ? "#fff" : "var(--muted)",
+              transition:"all .15s",
+            }}>{tab.label}</button>
+        ))}
+      </div>
+
       {/* ── STAT CARDS ── */}
       <div style={T.statRow}>
         {[
@@ -271,6 +313,30 @@ export default function DailyTask({ customers }) {
             <div style={{fontSize:10,color:"var(--muted2)",marginTop:4,fontWeight:600,textTransform:"uppercase",letterSpacing:".05em"}}>{s.label}</div>
           </div>
         ))}
+      </div>
+
+      {/* ── SEARCH BAR ── */}
+      <div style={{padding:"0 24px",marginBottom:8}}>
+        <div style={{position:"relative"}}>
+          <span style={{position:"absolute",left:10,top:"50%",transform:"translateY(-50%)",
+            fontSize:12,color:"var(--muted3)",pointerEvents:"none"}}>🔍</span>
+          <input
+            type="text"
+            placeholder="Search alerts, customer, engineer, ticket..."
+            value={searchQ}
+            onChange={e=>{ setSearchQ(e.target.value); setCurrentPage(1); }}
+            style={{width:"100%",background:"var(--bg3)",border:"1px solid var(--border2)",
+              borderRadius:7,color:"var(--text3)",fontFamily:"inherit",fontSize:11,
+              padding:"8px 10px 8px 32px",outline:"none",boxSizing:"border-box",
+              transition:"border-color .15s"}}
+          />
+          {searchQ && (
+            <button onClick={()=>setSearchQ("")}
+              style={{position:"absolute",right:8,top:"50%",transform:"translateY(-50%)",
+                background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:14,
+                lineHeight:1,padding:0}}>✕</button>
+          )}
+        </div>
       </div>
 
       {/* ── FILTERS ── */}
@@ -298,9 +364,10 @@ export default function DailyTask({ customers }) {
             <span className="spinner" style={{width:16,height:16}}/>Loading tasks…
           </div>
         ) : (
+          <>
           <table style={T.table}>
             <thead>
-              <tr>{["Task No","Customer","Task Description","Date","Start","End","Engineer","Status","Actions"].map(h=>(
+              <tr>{["Ticket No","Customer","Task Description","Date","Start","End","Engineer","Status","Actions"].map(h=>(
                 <th key={h} style={T.th}>{h}</th>
               ))}</tr>
             </thead>
@@ -309,12 +376,14 @@ export default function DailyTask({ customers }) {
                 <tr><td colSpan={9} style={{textAlign:"center",padding:"32px",color:"var(--muted3)",fontSize:12,fontStyle:"italic"}}>
                   {tasks.length===0 ? "No tasks yet — click \"Create Task\" to add one" : "No tasks match the current filter"}
                 </td></tr>
-              ) : filtered.map((t,i)=>(
+              ) : paginated.map((t,i)=>(
                 <tr key={t.id}
                   style={{background:i%2===0?"transparent":"var(--row-alt)",transition:"background .1s"}}
                   onMouseEnter={e=>e.currentTarget.style.background="var(--row-hover)"}
                   onMouseLeave={e=>e.currentTarget.style.background=i%2===0?"transparent":"var(--row-alt)"}>
-                  <td style={{...T.td,fontFamily:"monospace",color:"#B11226",fontWeight:600}}>{t.taskNo}</td>
+                  <td style={{...T.td,fontFamily:"monospace",color:"#B11226",fontWeight:600,fontSize:10}}>
+                    {(()=>{ const m=(t.detail||"").match(/Ticket:\s*(INC-\S+)/); return m?m[1]:(t.taskNo||"-"); })()}
+                  </td>
                   <td style={T.td}>
                     <span style={{fontSize:10,fontWeight:600,padding:"2px 8px",borderRadius:4,background:"rgba(177,18,38,.1)",color:"#B11226",border:"1px solid rgba(177,18,38,.2)"}}>{t.customer||"—"}</span>
                   </td>
@@ -356,6 +425,42 @@ export default function DailyTask({ customers }) {
               ))}
             </tbody>
           </table>
+          {/* ── PAGINATION ── */}
+          {totalPages > 1 && (
+            <div style={{display:"flex",alignItems:"center",justifyContent:"center",
+              gap:6,padding:"12px 0",borderTop:"1px solid var(--border)"}}>
+              <button onClick={()=>setCurrentPage(1)} disabled={safePage===1}
+                style={{...T.pgBtn,opacity:safePage===1?.3:1}}>«</button>
+              <button onClick={()=>setCurrentPage(p=>Math.max(1,p-1))} disabled={safePage===1}
+                style={{...T.pgBtn,opacity:safePage===1?.3:1}}>‹</button>
+              {Array.from({length:Math.min(5,totalPages)},(_,i)=>{
+                let page;
+                if (totalPages<=5) page=i+1;
+                else if (safePage<=3) page=i+1;
+                else if (safePage>=totalPages-2) page=totalPages-4+i;
+                else page=safePage-2+i;
+                return (
+                  <button key={page} onClick={()=>setCurrentPage(page)}
+                    style={{...T.pgBtn,
+                      background:safePage===page?"#B11226":"var(--surface2)",
+                      color:safePage===page?"#fff":"var(--muted)",
+                      border:safePage===page?"1px solid #B11226":"1px solid var(--border2)",
+                      minWidth:30}}>
+                    {page}
+                  </button>
+                );
+              })}
+              <button onClick={()=>setCurrentPage(p=>Math.min(totalPages,p+1))} disabled={safePage===totalPages}
+                style={{...T.pgBtn,opacity:safePage===totalPages?.3:1}}>›</button>
+              <button onClick={()=>setCurrentPage(totalPages)} disabled={safePage===totalPages}
+                style={{...T.pgBtn,opacity:safePage===totalPages?.3:1}}>»</button>
+              <span style={{fontSize:10,color:"var(--muted3)",marginLeft:4}}>
+                {(safePage-1)*PAGE_SIZE+1}–{Math.min(safePage*PAGE_SIZE,filtered.length)} of {filtered.length} tasks
+              </span>
+              {totalPages > 0 && <span style={{fontSize:10,color:"var(--muted3)"}}>(Page {safePage} of {totalPages})</span>}
+            </div>
+          )}
+          </>
         )}
       </div>
 
@@ -419,7 +524,9 @@ export default function DailyTask({ customers }) {
         <div className="modal-overlay" onClick={()=>setViewTask(null)}>
           <div className="modal" style={{width:480}} onClick={e=>e.stopPropagation()}>
             <div className="modal-header">
-              <span style={{fontFamily:"monospace",color:"#B11226"}}>{viewTask.taskNo}</span>
+              <span style={{fontFamily:"monospace",color:"#B11226",fontSize:11}}>
+              {(()=>{ const m=(viewTask.detail||"").match(/Ticket:\s*(INC-\S+)/); return m?m[1]:(viewTask.taskNo||"-"); })()}
+            </span>
               <button className="modal-close" onClick={()=>setViewTask(null)}>✕</button>
             </div>
             <div className="modal-body">
@@ -513,6 +620,9 @@ const T = {
   filterInput:{background:"var(--bg2)",border:"1px solid var(--border2)",color:"var(--text4)",fontFamily:"inherit",fontSize:11,padding:"5px 10px",borderRadius:5,outline:"none",cursor:"pointer"},
   clearFilterBtn:{background:"none",border:"1px solid var(--border2)",color:"var(--muted)",fontFamily:"inherit",fontSize:10,padding:"4px 10px",borderRadius:4,cursor:"pointer"},
   tableWrap: {flex:1,overflowY:"auto",padding:"0 24px 16px"},
+  pgBtn:     {background:"var(--surface2)",border:"1px solid var(--border2)",borderRadius:5,
+              color:"var(--muted)",fontFamily:"inherit",fontSize:11,padding:"4px 8px",
+              cursor:"pointer",transition:"all .15s"},
   table:     {width:"100%",borderCollapse:"collapse",tableLayout:"fixed"},
   th:        {textAlign:"left",padding:"10px 12px",fontSize:9,fontWeight:700,letterSpacing:".1em",textTransform:"uppercase",color:"var(--muted3)",borderBottom:"1px solid var(--border)",background:"var(--bg3)",whiteSpace:"nowrap",position:"sticky",top:0,zIndex:1},
   td:        {padding:"8px 12px",fontSize:11,color:"var(--text4)",borderBottom:"1px solid var(--border)",verticalAlign:"middle"},

@@ -7,6 +7,7 @@ import FilesPage    from "./pages/FilesPage.jsx";
 import LoginPage    from "./pages/LoginPage.jsx";
 import AlertPage    from "./pages/AlertPage.jsx";
 import EngineerActivity from "./pages/EngineerActivity.jsx";
+import ReportPage    from "./pages/ReportPage.jsx";
 import ReminderNotif from "./components/ReminderNotif.jsx";
 import AlertWatcher  from "./components/AlertWatcher.jsx";
 import "./styles.css";
@@ -89,6 +90,7 @@ export default function App() {
         {page==="daily-task"      && <DailyTask customers={customers} navigate={navigate} darkMode={darkMode}/>}
         {page==="alert-monitor"   && <AlertPage darkMode={darkMode}/>}
         {page==="engineer-activity" && <EngineerActivity navigate={navigate}/>}
+        {page==="report"         && <ReportPage />}
         {page==="customer"  && custId && <CustomerPage customerId={custId} navigate={navigate} ociSession={ociSess} running={running} setRunning={setRunning} statuses={statuses} setStatuses={setStatuses} logs={logs} setLogs={setLogs} activeLog={activeLog} setActiveLog={setActiveLog} darkMode={darkMode}/>}
         {page==="files"     && custId && <FilesPage customer={fullCust} navigate={navigate} darkMode={darkMode}/>}
         {["customers","accounts","grafana","credentials","schedules","logs-page","settings"].includes(page) && (
@@ -168,6 +170,7 @@ function Sidebar({ customers, page, navigate, custId, ociSess, onOciChange, runn
         <NavItem icon={TaskIcon}   label="Daily Task"       id="daily-task"      active={page==="daily-task"}      onClick={()=>navigate("daily-task")}/>
         <NavItem icon={AlertIcon}  label="Alert Monitor"    id="alert-monitor"   active={page==="alert-monitor"}   onClick={()=>navigate("alert-monitor")}/>
         <NavItem icon={ActivityIcon} label="Engineer Activity" id="engineer-activity" active={page==="engineer-activity"} onClick={()=>navigate("engineer-activity")}/>
+        <NavItem icon={ReportNavIcon} label="Report"          id="report"          active={page==="report"}        onClick={()=>navigate("report")}/>
 
         <div style={SB.sectionLabel}>MANAGEMENT</div>
         <NavItem icon={CustomerIcon}  label="Customers"         id="customers"   active={page==="customers"}   onClick={()=>navigate("customers")}/>
@@ -273,6 +276,8 @@ const SB = {
 function DashIcon({size=14})     { return <svg width={size} height={size} viewBox="0 0 16 16" fill="currentColor"><rect x="1" y="1" width="6" height="6" rx="1.5"/><rect x="9" y="1" width="6" height="6" rx="1.5"/><rect x="1" y="9" width="6" height="6" rx="1.5"/><rect x="9" y="9" width="6" height="6" rx="1.5"/></svg>; }
 function ReportIcon({size=14})   { return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="1.5" width="12" height="13" rx="1.5"/><line x1="5" y1="5.5" x2="11" y2="5.5"/><line x1="5" y1="8" x2="11" y2="8"/><line x1="5" y1="10.5" x2="8" y2="10.5"/></svg>; }
 function TaskIcon({size=14})     { return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="2" width="12" height="12" rx="2"/><polyline points="5,8 7,10 11,6"/></svg>; }
+
+function ReportNavIcon({size=14}) { return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="1.5" width="12" height="13" rx="1.5"/><line x1="5" y1="5.5" x2="11" y2="5.5"/><line x1="5" y1="8" x2="8" y2="8"/><circle cx="11" cy="11" r="2" stroke="currentColor" strokeWidth="1.2"/><line x1="12.4" y1="12.4" x2="14" y2="14"/></svg>; }
 function CustomerIcon({size=14}) { return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><circle cx="8" cy="5.5" r="3"/><path d="M2 14c0-3 2.5-5 6-5s6 2 6 5"/></svg>; }
 function AccountIcon({size=14})  { return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><rect x="2" y="2" width="12" height="12" rx="2"/><line x1="2" y1="6" x2="14" y2="6"/><line x1="6" y1="6" x2="6" y2="14"/></svg>; }
 function GrafanaIcon({size=14})  { return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="1,12 4,6 7,9 10,4 13,7 15,5"/><line x1="1" y1="14" x2="15" y2="14"/></svg>; }

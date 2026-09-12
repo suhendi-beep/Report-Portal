@@ -292,7 +292,7 @@ export default function Dashboard({ customers, navigate, currentUser, darkMode, 
         <div>
           <div style={{...D.greetSmall, color:T.muted}}>{greet}</div>
           <div style={{...D.greetName, color:T.text}}>
-            {currentUser} <span style={{fontSize:20}}>👋</span>
+            {currentUser}
           </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:10}}>
@@ -405,24 +405,46 @@ export default function Dashboard({ customers, navigate, currentUser, darkMode, 
               onClick: ()=>navigate("customers"),
             },
           ].map((s,i)=>(
-            <div key={i} style={{...D.kpiCard, borderColor:s.bd, cursor:"pointer"}}
+            <div key={i} style={{...D.kpiCard, borderColor:s.bd, cursor:"pointer",
+              background:`linear-gradient(135deg, var(--bg2) 0%, ${s.bg} 100%)`,
+              position:"relative", overflow:"hidden"}}
               onClick={s.onClick}>
-              <div style={{display:"flex",alignItems:"flex-start",gap:12}}>
-                <div style={{width:42,height:42,borderRadius:10,background:s.bg,
-                  display:"flex",alignItems:"center",justifyContent:"center",fontSize:18,flexShrink:0}}>
-                  {s.icon}
+              {/* Decorative background circle */}
+              <div style={{position:"absolute",top:-18,right:-18,width:80,height:80,
+                borderRadius:"50%",background:s.c,opacity:.06,pointerEvents:"none"}}/>
+              <div style={{display:"flex",alignItems:"center",gap:12}}>
+                {/* Circular ring */}
+                <div style={{flexShrink:0,position:"relative",width:52,height:52}}>
+                  <svg width="52" height="52" viewBox="0 0 52 52">
+                    <circle cx="26" cy="26" r="21" fill="none"
+                      stroke={s.c} strokeOpacity=".15" strokeWidth="4"/>
+                    <circle cx="26" cy="26" r="21" fill="none"
+                      stroke={s.c} strokeWidth="4" strokeLinecap="round"
+                      strokeDasharray={`${2*Math.PI*21*0.75} ${2*Math.PI*21*0.25}`}
+                      strokeDashoffset={2*Math.PI*21*0.25}
+                      transform="rotate(-90 26 26)"/>
+                  </svg>
+                  <div style={{position:"absolute",inset:0,display:"flex",
+                    alignItems:"center",justifyContent:"center",
+                    fontSize:typeof s.val==="number"&&s.val>999?9:11,
+                    fontWeight:700,color:s.c,lineHeight:1,textAlign:"center"}}>
+                    {typeof s.val==="string"&&s.val.includes("/")?
+                      <span style={{fontSize:9,fontWeight:700}}>{s.val}</span>
+                      : s.val}
+                  </div>
                 </div>
                 <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontSize:24,fontWeight:700,color:"var(--text)",
-                    letterSpacing:"-.04em",lineHeight:1}}>{s.val}</div>
-                  <div style={{fontSize:10,color:"var(--muted)",marginTop:3}}>{s.label}</div>
-                  <div style={{fontSize:9,color:"var(--muted2)",marginTop:2,
+                  <div style={{fontSize:12,fontWeight:700,color:"var(--text2)",
+                    letterSpacing:"-.01em",lineHeight:1.2}}>{s.label}</div>
+                  <div style={{fontSize:9,color:"var(--muted2)",marginTop:3,
                     overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{s.sub}</div>
+                  <div style={{display:"flex",alignItems:"center",gap:4,marginTop:5,
+                    fontSize:9,color:s.c,fontWeight:600}}>
+                    <span style={{width:4,height:4,borderRadius:"50%",background:s.c,
+                      display:"inline-block",flexShrink:0}}/>
+                    {s.trend}
+                  </div>
                 </div>
-              </div>
-              <div style={{display:"flex",alignItems:"center",gap:5,marginTop:8,
-                fontSize:10,color:s.c}}>
-                <span>↑</span>{s.trend}
               </div>
             </div>
           ))}
@@ -514,28 +536,36 @@ export default function Dashboard({ customers, navigate, currentUser, darkMode, 
           // Hitung frekuensi + kumpulkan semua detail per nama alert
           const freq = {};
           monthTasks.forEach(t => {
-            const name = (t.description||"")
-              .replace(/^\[ALERT\]\s*/, "")
-              .replace(/\s*→.*$/, "")
-              .trim();
-            if (!name) return;
-            if (!freq[name]) freq[name] = { count:0, lastSeen:"", folder:t.customer||"", tasks:[] };
-            freq[name].count++;
+            // Prioritaskan instance/nodename dari description (format: [ALERT] name → instance)
+            // atau dari detail field
+            const descMatch = (t.description||"").match(/→\s*(.+)$/);
+            const instanceFromDesc = descMatch ? descMatch[1].trim() : "";
+            const detailInstance = (()=>{
+              const m = (t.detail||"").match(/Instance\s*:\s*(.+)/);
+              return m ? m[1].trim() : "";
+            })();
+            const detailNodename = (()=>{
+              const m = (t.detail||"").match(/Nodename\s*:\s*(.+)/);
+              return m ? m[1].trim() : "";
+            })();
+            // Pilih: nodename > instance dari detail > instance dari desc > nama alert
+            const rawAlertName = (t.description||"").replace(/^\[ALERT\]\s*/,"").replace(/\s*→.*$/,"").trim();
+            const displayKey = detailNodename || detailInstance || instanceFromDesc || rawAlertName;
+            if (!displayKey) return;
+            if (!freq[displayKey]) freq[displayKey] = { count:0, lastSeen:"", folder:t.customer||"", tasks:[], alertName:rawAlertName };
+            freq[displayKey].count++;
             const d = t.date || t.createdAt || "";
-            if (!freq[name].lastSeen || d > freq[name].lastSeen) freq[name].lastSeen = d;
-            freq[name].tasks.push(t);
+            if (!freq[displayKey].lastSeen || d > freq[displayKey].lastSeen) freq[displayKey].lastSeen = d;
+            freq[displayKey].tasks.push(t);
           });
 
           const top10 = Object.entries(freq)
             .sort((a,b) => b[1].count - a[1].count)
-            .slice(0, 10);
+            .slice(0, 5);
 
           const maxCount = top10.length > 0 ? top10[0][1].count : 1;
 
-          const BAR_COLORS = [
-            "#EF4444","#F97316","#F59E0B","#EAB308","#84CC16",
-            "#22C55E","#14B8A6","#3B82F6","#8B5CF6","#EC4899",
-          ];
+          const BAR_COLORS = ["#EF4444","#F97316","#F59E0B","#84CC16","#3B82F6"];
 
           // CSV export
           const exportTrendCsv = () => {
@@ -567,7 +597,7 @@ export default function Dashboard({ customers, navigate, currentUser, darkMode, 
                 {/* Header */}
                 <div style={{ display:"flex", alignItems:"center", justifyContent:"space-between", marginBottom:12 }}>
                   <div style={{ display:"flex", alignItems:"center", gap:10 }}>
-                    <div style={D.cardTitle}>🔥 ALERT INCIDENT TREND — TOP 10</div>
+                    <div style={D.cardTitle}>🔥 ALERT INCIDENT TREND — TOP 5</div>
                     <span style={{ fontSize:10, color:"var(--muted2)" }}>
                       {monthTasks.length} alerts · {Object.keys(freq).length} unique
                     </span>
@@ -633,7 +663,7 @@ export default function Dashboard({ customers, navigate, currentUser, darkMode, 
                                   {name}
                                 </span>
                                 <span style={{ fontSize:9, color:"var(--muted2)" }}>
-                                  {info.folder}{ticket ? ` · ${ticket}` : ""}
+                                  {info.alertName ? `${info.alertName.slice(0,30)}${info.alertName.length>30?"…":""}` : info.folder}{ticket ? ` · ${ticket}` : ""}
                                 </span>
                               </div>
                               <div style={{ display:"flex", alignItems:"center", gap:5, flexShrink:0, marginLeft:6 }}>
