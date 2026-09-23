@@ -738,17 +738,37 @@ def create_task():
     data  = request.json or {}
 
     # Hanya PIC resmi yang boleh membuat Daily Task.
-    allowed_pics = {
-        "admin",
-        "Suhendi",
-        "Priyanto",
-        "Neal Hotama",
-        "Nazran Hisyami",
-    }
+    # Diturunkan dari USERS supaya SELALU sinkron dengan siapa yang
+    # benar-benar aktif — tidak perlu diingat manual tiap kali ada user
+    # baru/nonaktif (kejadian sebelumnya: Andre.Bastian sempat tidak
+    # bisa membuat task karena daftar ini di-hardcode terpisah dari
+    # USERS dan lupa diupdate).
+    allowed_pics = {v["display"] for v in USERS.values() if v.get("enabled", True)}
     pic = (data.get("pic") or "").strip()
     is_generate_report = bool(data.get("generateReport"))
 
     tasks = _load_tasks()
+
+    # ── Guard: rate-limit pembuatan task ───────────────────────────
+    # Mencegah insiden seperti sebelumnya (dummy/test generator loop
+    # ratusan kali dalam hitungan detik dan mencemari daily_tasks.json
+    # dengan ribuan record sampah). Kalau lebih dari 30 task dibuat
+    # dalam 60 detik terakhir, tolak dan minta investigasi manual —
+    # ini jauh di atas kewajaran alert-sync normal (polling tiap 5s).
+    now_ts = datetime.utcnow()
+    recent_count = 0
+    for t in tasks[:200]:  # tasks list terbaru ada di depan (insert(0, ...))
+        try:
+            created = datetime.fromisoformat((t.get("createdAt") or "").replace("Z", ""))
+            if (now_ts - created).total_seconds() <= 60:
+                recent_count += 1
+        except Exception:
+            continue
+    if recent_count >= 30:
+        return jsonify({
+            "error": "Terlalu banyak task dibuat dalam 60 detik terakhir — ditolak untuk mencegah data spam. Hubungi admin jika ini sengaja.",
+            "recent_count": recent_count,
+        }), 429
 
     # ── Prevent duplicate ALERT tasks ──────────────────────────────
     # Auto-sync alert boleh dibuat tanpa PIC.
