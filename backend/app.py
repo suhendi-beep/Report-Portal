@@ -648,10 +648,18 @@ def _record_activity(username, display, action, category="task", detail=""):
     (yang bisa gagal diam-diam kalau network/tab ditutup di tengah jalan).
     """
     logs = _load_activity()
+    # "date" HARUS pakai waktu WIB (datetime.now(), container TZ sudah
+    # Asia/Jakarta) — bukan UTC. Sebelumnya pakai datetime.utcnow() yang
+    # membuat entry jam 00:00-06:59 WIB tercatat dengan tanggal "kemarin"
+    # (karena UTC belum lewat tengah malam), sehingga hitungan "Ticket
+    # Close hari ini" di Dashboard/Engineer Activity jadi salah campur
+    # dengan data kemarin. "ts" tetap UTC-ISO (konvensi timestamp umum),
+    # hanya "date" yang harus WIB karena itu dipakai untuk filter harian.
+    now_wib = datetime.now()
     entry = {
         "id":       f"{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}",
         "ts":       datetime.utcnow().isoformat() + "Z",
-        "date":     datetime.utcnow().strftime("%Y-%m-%d"),
+        "date":     now_wib.strftime("%Y-%m-%d"),
         "username": username or "unknown",
         "display":  display or "Unknown",
         "action":   action or "",
