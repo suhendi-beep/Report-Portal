@@ -808,14 +808,21 @@ def create_task():
             if not alert_key and existing_desc == description:
                 return jsonify(existing), 200
 
-    # auto taskNo
+    # auto taskNo — reset setiap hari (WIB). Hanya task dengan field
+    # "date" == hari ini yang dihitung, jadi begitu lewat tengah malam
+    # nomor otomatis mulai dari TSK-001 lagi. Task hari-hari sebelumnya
+    # tetap tersimpan di data, hanya penomoran barunya yang direset.
+    today_wib = datetime.now().strftime("%Y-%m-%d")
     max_no = 0
     for t in tasks:
+        if (t.get("date") or "").strip() != today_wib:
+            continue
         try:
-            n = int((t.get("taskNo","TSK-000")).replace("TSK-",""))
-            if n > max_no: max_no = n
-        except: pass
-    task_no = f"TSK-{str(max_no+1).padStart if False else str(max_no+1).zfill(3)}"
+            n = int((t.get("taskNo") or "TSK-000").replace("TSK-", ""))
+            if n > max_no:
+                max_no = n
+        except Exception:
+            pass
     task_no = f"TSK-{str(max_no+1).zfill(3)}"
     new_task = {
         "id":          data.get("id") or f"task_{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}",
