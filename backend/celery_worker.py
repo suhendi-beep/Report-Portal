@@ -140,7 +140,11 @@ def run_automation_with_login(self, customer_id, automation_id, args=None):
         # via Redis (isi form + submit lewat send_keys), tidak pernah
         # butuh manusia melihat/mengklik browser secara langsung, jadi
         # headless aman dipakai di sini.
-        driver = get_driver(2560, 1440, headless=True)
+        # page_load_timeout dinaikkan ke 90s (dari default 45s) — halaman
+        # database OCI (oci_pelindo_backup) render chart/widget berat di
+        # bawah software rendering (tidak ada GPU di container) dan
+        # konsisten timeout di 45s pada percobaan sebelumnya.
+        driver = get_driver(2560, 1440, headless=True, page_load_timeout=90)
         wait   = WebDriverWait(driver, 90)
 
         # ── Step 1: Buka halaman sign-in OCI ─────────────────

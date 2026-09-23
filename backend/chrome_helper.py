@@ -2,13 +2,18 @@ from selenium import webdriver
 from selenium.webdriver.chrome.options import Options
 from selenium.webdriver.chrome.service import Service
 
-def get_driver(width=2560, height=1440, headless=True):
+def get_driver(width=2560, height=1440, headless=True, page_load_timeout=45):
     """
     Get Chrome WebDriver instance.
     Args:
         width: browser width
         height: browser height
         headless: if True, run headless; if False, show browser window (for manual OTP input)
+        page_load_timeout: detik sebelum driver.get() dianggap gagal.
+            Halaman OCI database (dbaas/dbsystems) merender chart/widget
+            yang berat di bawah software rendering (tidak ada GPU di
+            container) — bisa butuh lebih dari 45s. Naikkan ini per
+            pemanggilan untuk script yang capture halaman database.
     """
     options = Options()
     if headless:
@@ -33,7 +38,7 @@ def get_driver(width=2560, height=1440, headless=True):
     # (bisa 300s+) — 45s cukup untuk halaman normal tapi tetap gagal cepat
     # kalau memang macet, supaya loop di atas (backup scripts) bisa
     # menangkap exception dan lanjut ke resource berikutnya alih-alih hang.
-    driver.set_page_load_timeout(45)
+    driver.set_page_load_timeout(page_load_timeout)
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": """
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});

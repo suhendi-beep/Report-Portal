@@ -58,8 +58,14 @@ services:
         # Chromium/Grafana screenshot capture was nearly maxing the old 512M
         # limit (observed ~511MB in production), which throttles/slows the
         # task instead of erroring outright. Host has headroom for this.
+        # CPU raised 0.8 -> 1.4: OCI database pages (dbaas/dbsystems) render
+        # charts/widgets that are CPU-heavy under software rendering
+        # (no GPU in container) — 0.8 core was starving Chrome's renderer,
+        # causing every database screenshot to hit the page load timeout.
+        # Host has 2 cores total; 1.4 still leaves headroom for backend/
+        # frontend/other services.
         limits:
-          cpus: "0.8"
+          cpus: "1.4"
           memory: 896M
         reservations:
           cpus: "0.05"
