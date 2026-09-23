@@ -43,6 +43,8 @@ export default function GenerateReport({ customers, navigate }) {
   const [selCust,   setSelCust]   = useState("");
   const [selAuto,   setSelAuto]   = useState("");
   const [args,      setArgs]      = useState({});
+  const [credModal, setCredModal] = useState(false);
+  const [creds,     setCreds]     = useState({tenancy:"",username:"",password:""});
   const [otpModal,  setOtpModal]  = useState(false);
   const [otp,       setOtp]       = useState("");
   const [taskId,    setTaskId]    = useState(null);
@@ -212,6 +214,15 @@ export default function GenerateReport({ customers, navigate }) {
     // Jangan izinkan Generate Report baru jika masih ada proses berjalan.
     if (step === "running") return;
     if (!selCust||!selAuto) return;
+    // Automation yang butuh login OCI inline (oci_ilcs_backup,
+    // oci_pelindo_backup) — tampilkan modal kredensial dulu sebelum
+    // benar-benar menjalankan job. Tanpa ini, backend /api/run cuma
+    // balas {need_credentials:true} tanpa task_id, dan job tidak pernah
+    // benar-benar berjalan (itulah sebabnya kedua report ini sebelumnya
+    // "tidak jalan sama sekali" — modal-nya tidak pernah muncul).
+    if (auto?.requires_oci_credentials && (!creds.username||!creds.password)) {
+      setCredModal(true); return;
+    }
     setOtpSubmitted(false);
     setStep("running"); setLogLines([]);
     setDailyTaskId(null);
@@ -244,9 +255,17 @@ export default function GenerateReport({ customers, navigate }) {
 
       setDailyTaskId(taskData.id);
 
-      const d = await fetch("/api/run",{method:"POST",
-        headers:{"Content-Type":"application/json"},
-        body:JSON.stringify({customer:selCust,automation:selAuto,args,manual_generate:true})}).then(r=>r.json());
+      let d;
+      if (auto?.requires_oci_credentials) {
+        d = await fetch("/api/run_with_credentials",{method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({customer:selCust,automation:selAuto,args,...creds})}).then(r=>r.json());
+      } else {
+        d = await fetch("/api/run",{method:"POST",
+          headers:{"Content-Type":"application/json"},
+          body:JSON.stringify({customer:selCust,automation:selAuto,args,manual_generate:true})}).then(r=>r.json());
+        if (d.need_credentials) { setStep("idle"); setCredModal(true); return; }
+      }
       setOtpSubmitted(false);
 
       if (d.task_id) {
@@ -259,6 +278,7 @@ export default function GenerateReport({ customers, navigate }) {
     } catch(e) { setStep("error"); }
   };
 
+  const handleCredSubmit = () => { setCredModal(false); handleGenerate(); };
   const handleOtpSubmit  = async () => {
     await fetch("/api/oci/otp",{method:"POST",headers:{"Content-Type":"application/json"},
       body:JSON.stringify({task_id:taskId,otp})});
@@ -334,6 +354,22 @@ export default function GenerateReport({ customers, navigate }) {
                 placeholder={arg.label}/>
             </div>
           ))}
+
+          {/* OCI credentials notice */}
+          {auto?.requires_oci_credentials && (
+            <div style={G.credBox}>
+              <span style={{fontSize:16}}>🔑</span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:11,fontWeight:600,color:"var(--text2)"}}>OCI Credentials Required</div>
+                <div style={{fontSize:10,color:"var(--muted)",marginTop:1}}>
+                  {creds.username ? `Configured: ${creds.username}` : "Not configured yet"}
+                </div>
+              </div>
+              <button style={G.credBtn} onClick={()=>setCredModal(true)}>
+                {creds.username?"✓ Edit":"Set"}
+              </button>
+            </div>
+          )}
 
           {/* Auto info box */}
           {auto && (
@@ -520,6 +556,34 @@ export default function GenerateReport({ customers, navigate }) {
         </div>
       </div>
 
+      {/* ── OCI Credentials Modal ── */}
+      {credModal && (
+        <div className="modal-overlay" onClick={()=>setCredModal(false)}>
+          <div className="modal" onClick={e=>e.stopPropagation()}>
+            <div className="modal-header">
+              <span>🔑 OCI Credentials</span>
+              <button className="modal-close" onClick={()=>setCredModal(false)}>✕</button>
+            </div>
+            <div className="modal-body">
+              <p className="modal-note">Enter OCI login credentials for <strong style={{color:"var(--text2)"}}>{auto?.name}</strong></p>
+              <label className="form-label">Tenancy Name</label>
+              <input className="form-input" value={creds.tenancy}
+                onChange={e=>setCreds(p=>({...p,tenancy:e.target.value}))} placeholder="tenancy-name"/>
+              <label className="form-label" style={{marginTop:10}}>Username / Email</label>
+              <input className="form-input" value={creds.username}
+                onChange={e=>setCreds(p=>({...p,username:e.target.value}))} placeholder="user@email.com"/>
+              <label className="form-label" style={{marginTop:10}}>Password</label>
+              <input className="form-input" type="password" value={creds.password}
+                onChange={e=>setCreds(p=>({...p,password:e.target.value}))} placeholder="••••••••"/>
+              <button className="btn-primary" style={{marginTop:14}} onClick={handleCredSubmit}
+                disabled={!creds.username||!creds.password}>
+                ▶ Generate with Credentials
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* ── OTP Modal ── */}
       {otpModal && (
         <div className="modal-overlay">
@@ -570,6 +634,12 @@ const G = {
   infoBox:   {background:"var(--bg3)",border:"1px solid var(--border)",borderRadius:8,padding:"11px"},
   tag:       {fontSize:9,fontWeight:600,padding:"2px 7px",borderRadius:3,
               background:"var(--surface2)",color:"var(--muted)",border:"1px solid var(--border)"},
+  credBox:   {display:"flex",alignItems:"center",gap:9,padding:"10px 11px",
+              background:"rgba(245,158,11,.05)",border:"1px solid rgba(245,158,11,.18)",
+              borderRadius:7},
+  credBtn:   {background:"rgba(245,158,11,.1)",color:"#FBBF24",border:"1px solid rgba(245,158,11,.25)",
+              fontFamily:"inherit",fontSize:10,fontWeight:600,padding:"4px 10px",
+              borderRadius:5,cursor:"pointer",flexShrink:0},
   genBtn:    {background:"#B11226",color:"#fff",border:"none",fontFamily:"inherit",
               fontSize:12,fontWeight:600,padding:"11px",borderRadius:8,cursor:"pointer",
               display:"flex",alignItems:"center",justifyContent:"center",gap:8,
