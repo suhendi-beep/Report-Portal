@@ -6,6 +6,7 @@ services:
     # under a different tag — same Dockerfile, same content, half the disk.
     build: ./backend
     image: automation-hub-backend:latest
+    init: true
     ports: ["5000:5000"]
     restart: always
     volumes:
@@ -35,6 +36,7 @@ services:
     # only the startup command differs. Run `docker compose build backend`
     # then `docker compose up -d backend worker` to pick up changes.
     image: automation-hub-backend:latest
+    init: true
     depends_on: [backend]
     command: celery -A celery_worker.celery worker --loglevel=info --concurrency=1
     restart: always
