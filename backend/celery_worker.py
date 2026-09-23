@@ -134,7 +134,13 @@ def run_automation_with_login(self, customer_id, automation_id, args=None):
 
     driver = None
     try:
-        driver = get_driver(2560, 1440, headless=False)
+        # headless=True — container tidak punya X display (tidak ada Xvfb),
+        # jadi Chrome non-headless langsung exit begitu dibuat
+        # (SessionNotCreatedException). Flow OTP di bawah sudah otomatis
+        # via Redis (isi form + submit lewat send_keys), tidak pernah
+        # butuh manusia melihat/mengklik browser secara langsung, jadi
+        # headless aman dipakai di sini.
+        driver = get_driver(2560, 1440, headless=True)
         wait   = WebDriverWait(driver, 90)
 
         # ── Step 1: Buka halaman sign-in OCI ─────────────────
@@ -366,7 +372,10 @@ def run_oci_login_with_otp(self, tenancy, username, password):
 
     driver = None
     try:
-        driver = get_driver(headless=False)
+        # headless=True — sama alasan seperti run_automation_with_login:
+        # tidak ada X display di container, dan OTP di sini juga sudah
+        # otomatis via Redis, tidak butuh browser terlihat.
+        driver = get_driver(headless=True)
         wait   = WebDriverWait(driver, 90)
 
         # Step 1: Buka OCI
