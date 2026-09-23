@@ -1,7 +1,11 @@
 services:
 
   backend:
+    # `image:` names the build output. `worker` below reuses this exact
+    # image instead of building an identical ~2.8GB image a second time
+    # under a different tag — same Dockerfile, same content, half the disk.
     build: ./backend
+    image: automation-hub-backend:latest
     ports: ["5000:5000"]
     restart: always
     volumes:
@@ -12,6 +16,11 @@ services:
       - PYTHONPATH=/app
       - TZ=Asia/Jakarta
     networks: [hub-net]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     deploy:
       resources:
         limits:
@@ -22,7 +31,11 @@ services:
           memory: 96M
 
   worker:
-    build: ./backend
+    # Reuses the backend image built above (identical Dockerfile) —
+    # only the startup command differs. Run `docker compose build backend`
+    # then `docker compose up -d backend worker` to pick up changes.
+    image: automation-hub-backend:latest
+    depends_on: [backend]
     command: celery -A celery_worker.celery worker --loglevel=info --concurrency=1
     restart: always
     volumes:
@@ -33,6 +46,11 @@ services:
       - PYTHONPATH=/app
       - TZ=Asia/Jakarta
     networks: [hub-net]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     deploy:
       resources:
         # Chromium/Grafana screenshot capture was nearly maxing the old 512M
@@ -51,6 +69,11 @@ services:
     restart: always
     depends_on: [backend]
     networks: [hub-net]
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
     deploy:
       resources:
         limits:
