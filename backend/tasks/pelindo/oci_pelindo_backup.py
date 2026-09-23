@@ -25,29 +25,33 @@ URL_LIST = [
 ]
 
 
-def run(log_path=None, args=None):
+def run(log_path=None, args=None, driver=None):
+    """
+    Args:
+        log_path: Path ke log file
+        args: Dict arguments (tidak digunakan untuk sekarang)
+        driver: Selenium WebDriver yang sudah login (dikirim dari
+            celery_worker.py via run_automation_with_login, sama seperti
+            oci_ilcs_backup.py). Sebelumnya function ini membuat driver
+            sendiri dan login pakai cookies session — itu sudah tidak
+            konsisten dengan flow kredensial inline yang dipakai UI
+            sekarang, dan menyebabkan TypeError karena celery_worker.py
+            memanggil run(..., driver=driver) tapi signature lama tidak
+            menerima parameter itu.
+    """
     def log(msg):
         if log_path:
             with open(log_path, "a") as f:
                 f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
         print(msg)
 
-    import oci_session
-    from chrome_helper import get_driver
-
-    driver = get_driver(1920, 1400)
+    # Driver sudah login dari celery_worker.py — tidak perlu login lagi di sini.
     wait   = WebDriverWait(driver, 60)
     saved_files = []
     TODAY = datetime.now().strftime("%Y-%m-%d")
 
     try:
-        log("Loading OCI session cookies...")
-        if not oci_session.load_cookies(driver):
-            driver.quit()
-            return "ERROR: OCI cookies tidak ditemukan. Login OCI dari dashboard dulu."
-
-        driver.refresh()
-        time.sleep(5)
+        log("Session valid, starting capture...")
 
         for name, url in URL_LIST:
             log(f"Opening: {name}")
@@ -76,7 +80,9 @@ def run(log_path=None, args=None):
             log(f"Captured: {name}")
 
     finally:
-        driver.quit()
+        # Driver akan di-quit oleh celery_worker (sama seperti
+        # oci_ilcs_backup.py) — bukan di sini, supaya tidak di-quit dua kali.
+        pass
 
     log(f"Total captured: {len(saved_files)} — Generating Word report...")
 

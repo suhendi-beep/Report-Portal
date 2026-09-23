@@ -334,8 +334,13 @@ def run_automation_with_login(self, customer_id, automation_id, args=None):
         r.setex(STATE_KEY, 300, json.dumps({"state": "running"}))
         module = importlib.import_module(f"tasks.{customer_id}.{automation_id}")
         result = module.run(log_path=log_path, args=args, driver=driver)
-
-        driver = None  # module sudah quit driver
+        # NOTE: module TIDAK quit driver-nya sendiri (lihat oci_ilcs_backup.py
+        # dan oci_pelindo_backup.py — keduanya sengaja `pass` di finally block
+        # mereka). Driver di-quit oleh finally block celery_worker ini.
+        # Sebelumnya baris ini men-set driver=None dengan asumsi module sudah
+        # quit-nya, padahal tidak — itu membuat Chrome process menggantung,
+        # tidak pernah ditutup setiap kali automation ini selesai (memory/
+        # process leak yang memperlambat proses berikutnya).
         r.setex(STATE_KEY, 60, json.dumps({"state": "success"}))
         _log(log_path, f"=== DONE: {result} ===")
         return {"status": "success", "result": result}
