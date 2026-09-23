@@ -12,6 +12,8 @@ import ReminderNotif from "./components/ReminderNotif.jsx";
 import AlertWatcher  from "./components/AlertWatcher.jsx";
 import "./styles.css";
 
+import OCILoginModal from "./components/OCILoginModal";
+
 export default function App() {
   // ── One-time cleanup of old localStorage keys (task data now lives in backend) ──
   React.useEffect(() => {
@@ -212,9 +214,8 @@ function Sidebar({ customers, page, navigate, custId, ociSess, onOciChange, runn
       </div>
 
       {showOci && (
-        <OciModal loggedIn={ociSess?.logged_in} savedAt={ociSess?.saved_at}
-          onClose={()=>setShowOci(false)}
-          onDone={()=>{ setShowOci(false); onOciChange(); }}/>
+        <OCILoginModal onClose={()=>setShowOci(false)}
+          onSuccess={()=>{ setShowOci(false); onOciChange(); }}/>
       )}
     </aside>
   );
@@ -288,48 +289,3 @@ function SettingsIcon({size=14}) { return <svg width={size} height={size} viewBo
 function AlertIcon({size=14})    { return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><path d="M8 2L2 13h12L8 2z"/><line x1="8" y1="7" x2="8" y2="10"/><circle cx="8" cy="12" r=".6" fill="currentColor" stroke="none"/></svg>; }
 function ActivityIcon({size=14}) { return <svg width={size} height={size} viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.5"><polyline points="1,8 4,5 6,9 9,3 12,7 15,4"/><line x1="1" y1="13" x2="15" y2="13"/></svg>; }
 
-/* ── OCI Modal ── */
-function OciModal({ loggedIn, savedAt, onClose, onDone }) {
-  const [json, setJson] = useState("");
-  const [st,   setSt]   = useState("idle");
-  const [msg,  setMsg]  = useState("");
-  const save = async () => {
-    if (!json.trim()) return; setSt("loading"); setMsg("Saving…");
-    try {
-      const d = await fetch("/api/oci/save_cookies",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({cookies:json})}).then(r=>r.json());
-      if (d.status==="ok") { setSt("done"); setMsg(`✅ ${d.count} cookies saved`); setTimeout(onDone,1500); }
-      else { setSt("error"); setMsg("Error: "+(d.error||"unknown")); }
-    } catch(e) { setSt("error"); setMsg(e.message); }
-  };
-  const logout = async () => { await fetch("/api/oci/logout",{method:"POST"}); onDone(); };
-  return (
-    <div className="modal-overlay" onClick={onClose}>
-      <div className="modal" style={{width:480}} onClick={e=>e.stopPropagation()}>
-        <div className="modal-header"><span>🔶 OCI Session</span><button className="modal-close" onClick={onClose}>✕</button></div>
-        {loggedIn ? (
-          <div className="modal-body">
-            <div className="oci-status-ok">✓ Session Active</div>
-            {savedAt&&<div className="oci-saved">Saved: {new Date(savedAt).toLocaleString()}</div>}
-            <button className="btn-danger" onClick={logout}>Disconnect</button>
-          </div>
-        ) : (
-          <div className="modal-body">
-            <p className="modal-note" style={{fontWeight:600}}>How to connect OCI:</p>
-            <ol style={{fontSize:11,color:"var(--muted)",paddingLeft:16,lineHeight:2.2}}>
-              <li>Install <strong style={{color:"var(--text2)"}}>EditThisCookie</strong> in Chrome</li>
-              <li>Login at <a href="https://cloud.oracle.com" target="_blank" rel="noreferrer" style={{color:"#B11226"}}>cloud.oracle.com</a></li>
-              <li>Export cookies → Paste below</li>
-            </ol>
-            <label className="form-label">Cookies JSON</label>
-            <textarea className="form-input" style={{height:80,resize:"vertical",fontFamily:"monospace",fontSize:10}}
-              value={json} onChange={e=>setJson(e.target.value)} placeholder='[{"name":"..."}]' disabled={st==="loading"}/>
-            {msg&&<div className={"form-msg "+st}>{msg}</div>}
-            <button className="btn-primary" onClick={save} disabled={st==="loading"||!json.trim()}>
-              {st==="loading"?"Saving…":"💾 Save & Connect"}
-            </button>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}

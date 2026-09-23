@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useCallback } from "react";
-import { logActivity } from "../activityLog.js";
 
 /* ── Constants ── */
 const OLD_STORAGE_KEY = "portal_report_daily_tasks";
@@ -12,15 +11,26 @@ const STATUS_STYLE    = {
 };
 
 /* ── API helpers ── */
+// Siapa yang melakukan aksi ini — dilampirkan ke setiap create/update/
+// delete supaya BACKEND (bukan frontend) yang menulis activity log.
+// Ini memastikan tidak ada mutasi task yang kelewat tercatat, karena
+// pencatatannya tidak lagi bergantung pada request kedua yang terpisah
+// (logActivity) yang bisa gagal diam-diam.
+function _actor() {
+  return {
+    _by:        sessionStorage.getItem("pr_user")    || "unknown",
+    _byDisplay: sessionStorage.getItem("pr_display") || "Unknown",
+  };
+}
 const apiGet = () =>
   fetch("/api/tasks")
     .then(r => r.json())
     .then(tasks => Array.isArray(tasks) ? tasks : []);
-const apiCreate = (task)        => fetch("/api/tasks",            { method:"POST",   headers:{"Content-Type":"application/json"}, body:JSON.stringify(task)   }).then(r => r.json());
-const apiUpdate = (id, changes) => fetch(`/api/tasks/${id}`,      { method:"PUT",    headers:{"Content-Type":"application/json"}, body:JSON.stringify(changes)}).then(r => r.json());
-const apiDelete = (id)          => fetch(`/api/tasks/${id}`,      { method:"DELETE" }).then(r => r.json());
+const apiCreate = (task)        => fetch("/api/tasks",            { method:"POST",   headers:{"Content-Type":"application/json"}, body:JSON.stringify({...task, ..._actor()})   }).then(r => r.json());
+const apiUpdate = (id, changes) => fetch(`/api/tasks/${id}`,      { method:"PUT",    headers:{"Content-Type":"application/json"}, body:JSON.stringify({...changes, ..._actor()})}).then(r => r.json());
+const apiDelete = (id)          => fetch(`/api/tasks/${id}`,      { method:"DELETE", headers:{"Content-Type":"application/json"}, body:JSON.stringify(_actor()) }).then(r => r.json());
 const apiRequestDelete  = (id, user) => fetch(`/api/tasks/${id}/request-delete`,  { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify(user)  }).then(r => r.json());
-const apiApproveDelete  = (id, action) => fetch(`/api/tasks/${id}/approve-delete`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action}) }).then(r => r.json());
+const apiApproveDelete  = (id, action) => fetch(`/api/tasks/${id}/approve-delete`, { method:"POST", headers:{"Content-Type":"application/json"}, body:JSON.stringify({action, ..._actor()}) }).then(r => r.json());
 const apiPendingDeletes = ()    => fetch("/api/tasks/pending-deletes").then(r => r.json());
 
 /* ── One-time migration: DISABLED — data lama sudah dibersihkan ── */
@@ -126,7 +136,7 @@ export default function DailyTask({ customers }) {
   const [currentPage,    setCurrentPage]    = useState(1);
   const PAGE_SIZE = 10;
 
-  const today = new Date().toISOString().split("T")[0];
+  const today = new Date().toLocaleString("en-CA", {timeZone:"Asia/Jakarta", year:"numeric", month:"2-digit", day:"2-digit"}).split(",")[0];
   const thisMonth = today.slice(0, 7); // YYYY-MM
 
   /* ── Load tasks dari API ── */
@@ -161,14 +171,17 @@ export default function DailyTask({ customers }) {
   };
   const openEdit = (t) => { setEditId(t.id); setForm({...t}); setShowModal(true); };
 
+  // NOTE: activity log untuk create/update/delete task SEKARANG ditulis
+  // oleh BACKEND (lihat _record_activity di app.py), bukan dari sini.
+  // Ini memastikan tidak ada mutasi task yang kelewat tercatat walaupun
+  // request /api/activity terpisah gagal — backend selalu mencatat
+  // begitu task benar-benar berubah di daily_tasks.json.
   const handleSubmit = async () => {
     if (!form.customer || !form.description) return;
     if (editId) {
       await apiUpdate(editId, form);
-      logActivity("Edit Task", "task", `${form.description} — ${form.customer}`);
     } else {
       await apiCreate({ ...form, createdAt: new Date().toISOString() });
-      logActivity("Create Task", "task", `[${form.customer}] ${form.description}${form.detail ? " — "+form.detail.slice(0,80):""}`);
     }
     setShowModal(false);
     setEditId(null);
@@ -192,7 +205,6 @@ export default function DailyTask({ customers }) {
         alert("Delete request already sent. Waiting for admin approval.");
       } else {
         alert("Delete request sent. Admin will review your request.");
-        logActivity("Request Delete Task", "task", `${t?.description || id} (${t?.taskNo || ""})`);
       }
     }
   };
@@ -204,9 +216,7 @@ export default function DailyTask({ customers }) {
   };
 
   const handleStatusChange = async (id, status) => {
-    const t = tasks.find(t => t.id === id);
     await apiUpdate(id, { status });
-    if (t) logActivity("Update Task Status", "task", `${t.description} → ${status}`);
     // Optimistic update
     setTasks(p => p.map(x => x.id===id ? {...x,status} : x));
   };

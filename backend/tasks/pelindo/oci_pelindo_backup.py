@@ -25,68 +25,45 @@ URL_LIST = [
 ]
 
 
-def run(log_path=None, args=None, driver=None):
+def run(log_path=None, args=None):
     def log(msg):
         if log_path:
             with open(log_path, "a") as f:
                 f.write(f"[{datetime.now().strftime('%Y-%m-%d %H:%M:%S')}] {msg}\n")
         print(msg)
 
+    import oci_session
     from chrome_helper import get_driver
 
-    own_driver = driver is None
-    if own_driver:
-        # Mode lama: pakai cookies
-        import oci_session
-        driver = get_driver(2560, 1440)
+    driver = get_driver(1920, 1400)
+    wait   = WebDriverWait(driver, 60)
+    saved_files = []
+    TODAY = datetime.now().strftime("%Y-%m-%d")
+
+    try:
+        log("Loading OCI session cookies...")
         if not oci_session.load_cookies(driver):
             driver.quit()
             return "ERROR: OCI cookies tidak ditemukan. Login OCI dari dashboard dulu."
-        driver.get("https://cloud.oracle.com")
-        time.sleep(8)
-        if "sign-in" in driver.current_url or "login" in driver.current_url:
-            driver.quit()
-            return "ERROR: OCI session expired. Silakan login ulang."
 
-    wait       = WebDriverWait(driver, 60)
-    saved_files = []
-    TODAY      = datetime.now().strftime("%Y-%m-%d")
+        driver.refresh()
+        time.sleep(5)
 
-    try:
-        log("Session valid, starting capture...")
-
-        for idx, (name, url) in enumerate(URL_LIST):
+        for name, url in URL_LIST:
             log(f"Opening: {name}")
             driver.get(url)
-
-            # Halaman pertama perlu waktu lebih lama (browser cold start)
-            base_wait = 5 if idx == 0 else 3
-            time.sleep(base_wait)
-
-            if "sign-in" in driver.current_url or "login" in driver.current_url:
-                log(f"  SKIP: {name} — session expired")
-                continue
-
-            # Tunggu tabel backup muncul dengan data (max 10 detik)
-            try:
-                from selenium.webdriver.support import expected_conditions as EC2
-                from selenium.webdriver.common.by import By as BY2
-                WebDriverWait(driver, 10).until(
-                    EC2.presence_of_element_located((BY2.CSS_SELECTOR,
-                        "table tbody tr, .oui-table tbody tr, [role='row']"))
-                )
-                time.sleep(1)  # tunggu data render
-            except Exception:
-                time.sleep(2)
-
-            driver.execute_script("window.scrollTo(0, 150)")
-            time.sleep(0.5)
+            wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
+            # Wait for OCI console to be fully loaded (reduced from 8s to 3s)
+            time.sleep(3)
+            driver.execute_script("window.scrollTo(0,300)")
+            # Wait for any lazy-loaded content (reduced from 5s to 2s)
+            time.sleep(2)
 
             png   = driver.get_screenshot_as_png()
             image = Image.open(io.BytesIO(png))
             w, h  = image.size
 
-            left_crop   = 30 if "dbaas" in url.lower() else 30
+            left_crop   = 200 if "dbaas" in url.lower() else 30
             top_crop    = 80
             right_crop  = max(w - 20, left_crop + 1)
             bottom_crop = max(h - 90, top_crop + 1)
@@ -99,11 +76,7 @@ def run(log_path=None, args=None, driver=None):
             log(f"Captured: {name}")
 
     finally:
-        if own_driver:
-            driver.quit()
-
-    if not saved_files:
-        return "ERROR: Tidak ada halaman berhasil di-capture."
+        driver.quit()
 
     log(f"Total captured: {len(saved_files)} — Generating Word report...")
 
@@ -115,35 +88,18 @@ def run(log_path=None, args=None, driver=None):
     document.add_heading(f"Oracle Backup Report Pelindo - {TODAY}", level=1)
 
     for i in range(0, len(saved_files), 2):
-        # Tambah nama + gambar pertama
+        table       = document.add_table(rows=2, cols=1)
         name1, img1 = saved_files[i]
-        document.add_paragraph(name1, style="Heading 3")
-        p1 = document.add_paragraph()
-        p1.add_run().add_picture(img1, width=Inches(6.5))
-
-        # Tambah nama + gambar kedua kalau ada
+        cell1       = table.rows[0].cells[0]
+        cell1.add_paragraph(name1)
+        cell1.paragraphs[-1].add_run().add_picture(img1, width=Inches(6))
         if i + 1 < len(saved_files):
             name2, img2 = saved_files[i + 1]
-            document.add_paragraph(name2, style="Heading 3")
-            p2 = document.add_paragraph()
-            p2.add_run().add_picture(img2, width=Inches(6.5))
-
+            cell2       = table.rows[1].cells[0]
+            cell2.add_paragraph(name2)
+            cell2.paragraphs[-1].add_run().add_picture(img2, width=Inches(6))
         document.add_page_break()
 
     document.save(doc_name)
     log(f"Report saved: {doc_name}")
-
-    # Hapus file lama, sisakan 2 terbaru
-    try:
-        all_files = sorted(
-            [f for f in os.listdir(output_dir) if f.startswith("pelindo_oci_pelindo_") and f.endswith(".docx")],
-            reverse=True
-        )
-        for old in all_files[2:]:
-            if old != os.path.basename(doc_name):
-                os.remove(os.path.join(output_dir, old))
-                log(f"Deleted old file: {old}")
-    except Exception as e:
-        log(f"Cleanup warning: {e}")
-
     return f"DONE: {os.path.basename(doc_name)}"

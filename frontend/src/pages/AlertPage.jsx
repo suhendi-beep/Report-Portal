@@ -1203,11 +1203,21 @@ function recordTicketCreated(alertKey) {
 }
 
 /* ── API helpers for tasks ── */
+// Siapa yang melakukan aksi ini — dilampirkan ke setiap create/update
+// supaya BACKEND (bukan frontend) yang menulis activity log. Ini juga
+// berlaku untuk auto-sync (createTaskFromAlert / auto-close) yang
+// berjalan tanpa klik manusia — pakai "system" sebagai actor supaya
+// tetap tercatat di Engineer Activity, tidak pernah kelewat.
+function _actor() {
+  const username = sessionStorage.getItem("pr_user")    || "system";
+  const display   = sessionStorage.getItem("pr_display") || "System";
+  return { _by: username, _byDisplay: display };
+}
 const taskApiCreate = async (task) => {
   const r = await fetch("/api/tasks", {
     method: "POST",
     headers: {"Content-Type": "application/json"},
-    body: JSON.stringify(task),
+    body: JSON.stringify({ ...task, ..._actor() }),
   });
   const data = await r.json().catch(() => ({}));
   if (!r.ok) {
@@ -1216,7 +1226,7 @@ const taskApiCreate = async (task) => {
   return data;
 };
 const taskApiUpdate = (id, changes) =>
-  fetch(`/api/tasks/${id}`, { method:"PUT",  headers:{"Content-Type":"application/json"}, body:JSON.stringify(changes) }).then(r=>r.json());
+  fetch(`/api/tasks/${id}`, { method:"PUT",  headers:{"Content-Type":"application/json"}, body:JSON.stringify({ ...changes, ..._actor() }) }).then(r=>r.json());
 
 async function createTaskFromAlert(alert) {
   const resource = alert.resource && alert.resource !== "-" ? ` → ${alert.resource}` : "";
@@ -1307,15 +1317,15 @@ async function syncAlertsToDailyTask(alerts) {
     if (!t.description?.startsWith("[ALERT]")) continue;
     if (t.status === "Close" || t.status === "Cancelled") continue;
     if (!activeDescs.has(t.description)) {
+      // Activity log untuk auto-close SEKARANG ditulis oleh backend
+      // (lihat _record_activity di app.py update_task) begitu status
+      // benar-benar berubah jadi "Close" — tidak lagi bergantung pada
+      // logActivity() terpisah di sini yang bisa gagal diam-diam.
       await taskApiUpdate(t.id, {
         status: "Close",
         end:    timeWIB(),
         detail: (t.detail || "") + `\n\nResolved: ${dateTimeWIB()}`,
       });
-      // Auto-close by the alert sync must also be recorded, otherwise
-      // Engineer Activity KPI's "Tasks Closed" undercounts — it only reads
-      // from the activity log, not from task status directly.
-      logActivity("Update Task Status", "task", `${t.description} → Close`);
       resolved++;
     }
   }
@@ -1442,6 +1452,11 @@ export default function AlertPage() {
              t.status !== "Cancelled"
       );
 
+      // NOTE: assign PIC & create task sekarang di-log oleh BACKEND
+      // (_record_activity di app.py update_task/create_task), jadi
+      // tidak perlu logActivity() manual di sini lagi. Ini menutup
+      // celah dimana assign PIC ke task existing sebelumnya tidak
+      // pernah tercatat sama sekali.
       if (existing) {
         if (by && existing.pic !== by) {
           await taskApiUpdate(existing.id, { pic: by });
@@ -1465,7 +1480,6 @@ export default function AlertPage() {
       };
 
       await taskApiCreate(task);
-      logActivity("Create Task", "task", `[${folder}] ${desc}`);
       recordTicketCreated(key);
     } catch (err) {
       console.error("[LAPORKAN → TASK] gagal:", err);
@@ -1483,9 +1497,15 @@ export default function AlertPage() {
     try {
       const allTasks = await fetch("/api/tasks").then(r=>r.json());
       if (!Array.isArray(allTasks)) return;
+      // _action/_detail dilampirkan supaya backend mencatat label
+      // "Dismiss Alert" yang lebih deskriptif (bukan default generic
+      // "Update Task Status"/"Create Task"), sambil tetap memastikan
+      // pencatatan terjadi di backend — bukan lewat logActivity()
+      // terpisah yang bisa gagal diam-diam.
       const existing = allTasks.find(t => t.description===desc && t.status!=="Close" && t.status!=="Cancelled");
+      const dismissLog = { _action: "Dismiss Alert", _detail: desc+" dismissed by "+(by||"engineer") };
       if (existing) {
-        await taskApiUpdate(existing.id, { status:"Cancelled", end:timeWIB(), pic:by||"Dismissed" });
+        await taskApiUpdate(existing.id, { status:"Cancelled", end:timeWIB(), pic:by||"Dismissed", ...dismissLog });
       } else {
         await taskApiCreate({
           id: "alert_"+Date.now()+"_"+Math.random().toString(36).slice(2,7),
@@ -1494,9 +1514,9 @@ export default function AlertPage() {
           pic: by||"Dismissed", status: "Cancelled",
           detail: "Severity: "+(alert.severity||"-")+"\nDuration: "+fmtDur(alert.duration_min)+"\nSince: "+fmtTime(alert.active_at)+"\nFolder: "+folder+"\nAction: Dismissed by "+(by||"engineer"),
           createdAt: new Date().toISOString(),
+          ...dismissLog,
         });
       }
-      logActivity("Dismiss Alert", "task", desc+" dismissed by "+(by||"engineer"));
     } catch(err) { console.error("[DISMISS]", err); }
   };
 

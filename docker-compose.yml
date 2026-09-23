@@ -47,7 +47,7 @@ services:
 
   frontend:
     build: ./frontend
-    ports: ["3000:80"]
+    ports: ["3005:80"]
     restart: always
     depends_on: [backend]
     networks: [hub-net]

@@ -59,7 +59,7 @@ def run_oci_login(self, username, password):
         import oci_session, time
 
         driver = get_driver()
-        wait   = WebDriverWait(driver, 30)
+        wait   = WebDriverWait(driver, 90)
 
         _log(log_path, "Browser started, opening OCI...")
         driver.get("https://cloud.oracle.com")
@@ -134,8 +134,8 @@ def run_automation_with_login(self, customer_id, automation_id, args=None):
 
     driver = None
     try:
-        driver = get_driver(2560, 1440)
-        wait   = WebDriverWait(driver, 40)
+        driver = get_driver(2560, 1440, headless=False)
+        wait   = WebDriverWait(driver, 90)
 
         # ── Step 1: Buka halaman sign-in OCI ─────────────────
         _log(log_path, "Opening OCI login page...")
@@ -217,7 +217,7 @@ def run_automation_with_login(self, customer_id, automation_id, args=None):
 
         if otp_needed:
             r.setex(STATE_KEY, 300, json.dumps({"state": "otp_required"}))
-            _log(log_path, "Waiting for OTP from user...")
+            _log(log_path, "OTP required — check browser window on server to enter OTP")
 
             otp_code = None
             for _ in range(150):  # max 5 menit
@@ -239,6 +239,14 @@ def run_automation_with_login(self, customer_id, automation_id, args=None):
                     "input[placeholder='Enter Passcode'], input[placeholder*='Passcode']")
                 otp_input.clear()
                 otp_input.send_keys(otp_code)
+                # Try to check "Trust this device" checkbox
+                try:
+                    trust_cb = driver.find_element(By.CSS_SELECTOR, "input[type='checkbox'][id*='trust'], input[type='checkbox'][id*='remember'], input[type='checkbox'][name*='trust']")
+                    if not trust_cb.is_selected():
+                        trust_cb.click()
+                        _log(log_path, "Checked 'Trust this device' checkbox")
+                except Exception:
+                    pass
                 time.sleep(1)
                 # Klik Verify - coba berbagai selector
                 verify_clicked = False
@@ -263,7 +271,21 @@ def run_automation_with_login(self, customer_id, automation_id, args=None):
             except Exception as e:
                 _log(log_path, f"OTP submit error: {e}")
 
+        
+        # Check if OTP failed (still on signin/error page)
+        try:
+            current = driver.current_url
+            if "signin" in current or "error" in current.lower():
+                page_text = driver.page_source[:500]
+                if "incorrect" in page_text.lower() or "invalid" in page_text.lower() or "wrong" in page_text.lower():
+                    _log(log_path, "OTP verification FAILED - incorrect code or expired")
+                    driver.quit()
+                    return {"status": "error", "error": "OTP verification failed - code incorrect or expired"}
+        except Exception:
+            pass
             time.sleep(5)
+            # CRITICAL FIX: Change state immediately after OTP submit
+            r.setex(STATE_KEY, 300, json.dumps({"state": "verifying_otp"}))
 
         # ── Step 5: Session Picker ────────────────────────────
         # Kalau ada "You have N active sessions", pilih tenancy yang sesuai
@@ -284,12 +306,19 @@ def run_automation_with_login(self, customer_id, automation_id, args=None):
         # ── Step 6: Tunggu masuk OCI Console ─────────────────
         _log(log_path, "Waiting for OCI console...")
         for _ in range(30):
-            time.sleep(2)
-            url = driver.current_url
+            time.sleep(1)
+            try:
+                url = driver.current_url
+            except Exception:
+                continue
             if "cloud.oracle.com" in url and "sign-in" not in url and "login" not in url and "signin" not in url:
                 break
 
-        _log(log_path, f"Console URL: {driver.current_url}")
+        try:
+            final_url = driver.current_url
+            _log(log_path, f"Console URL: {final_url}")
+        except Exception:
+            _log(log_path, "Console URL: (unable to fetch - continuing anyway)")
         time.sleep(3)
 
         # ── Jalankan automation dengan driver yang sudah login ──
@@ -337,8 +366,8 @@ def run_oci_login_with_otp(self, tenancy, username, password):
 
     driver = None
     try:
-        driver = get_driver()
-        wait   = WebDriverWait(driver, 30)
+        driver = get_driver(headless=False)
+        wait   = WebDriverWait(driver, 90)
 
         # Step 1: Buka OCI
         _log(log_path, "Opening OCI login page...")
@@ -434,7 +463,10 @@ def run_oci_login_with_otp(self, tenancy, username, password):
         _log(log_path, "Waiting for console redirect...")
         for _ in range(30):
             time.sleep(2)
-            url = driver.current_url
+            try:
+                url = driver.current_url
+            except Exception:
+                continue
             if "cloud.oracle.com" in url and "sign-in" not in url and "login" not in url:
                 break
 
@@ -463,6 +495,25 @@ def run_oci_login_with_otp(self, tenancy, username, password):
 # ═══════════════════════════════════════════════════════════════════════════════
 # SCHEDULED TASKS
 # ═══════════════════════════════════════════════════════════════════════════════
+
+
+@celery.task(bind=True)
+def submit_oci_otp(self, task_id, otp):
+    """Submit OTP code ke Redis untuk di-pick up oleh run_oci_login_with_otp"""
+    import redis
+    log_path = "/app/shared/logs/_oci_login.log"
+    
+    _log(log_path, f"=== OTP SUBMIT | task={task_id}, otp={otp} ===")
+    
+    try:
+        r = redis.from_url(REDIS_URL)
+        # Set OTP ke Redis dengan key yang di-poll oleh login task
+        r.setex(f"oci_login_otp:{task_id}", 300, otp)
+        _log(log_path, f"OTP written to Redis: oci_login_otp:{task_id}")
+        return {"status": "ok", "message": "OTP submitted"}
+    except Exception as e:
+        _log(log_path, f"ERROR submitting OTP: {e}")
+        return {"status": "error", "error": str(e)}
 
 @celery.task(bind=True, name="celery_worker.scheduled_daily_ilcs")
 def scheduled_daily_ilcs(self):

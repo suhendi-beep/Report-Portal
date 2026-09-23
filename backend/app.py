@@ -556,11 +556,12 @@ def oci_logout():
 #  AUTH — Multi-user with roles
 # ══════════════════════════════════════════════════════════
 USERS = {
-    "admin":         {"password": "admin2026!",  "role": "admin",    "display": "Admin"},
-    "suhendi":       {"password": "m7Kx9pQ3nRvL2wZt", "role": "engineer", "display": "Suhendi"},
-    "Priyanto":      {"password": "bF4hJeU8cYsA6dNp", "role": "engineer", "display": "Priyanto"},
-    "neal.hotama":   {"password": "Tg5zXw1kMrD0qVjH", "role": "engineer", "display": "Neal Hotama"},
-    "nazran.hisyami": {"password": "Wy2nLf6uBsC9eKoP", "role": "engineer", "display": "Nazran Hisyami"},
+    "admin":          {"password": "admin2026!", "role": "admin", "display": "Admin", "enabled": True},
+    "suhendi":        {"password": "m7Kx9pQ3nRvL2wZt", "role": "engineer", "display": "Suhendi", "enabled": True},
+    "Priyanto":       {"password": "bF4hJeU8cYsA6dNp", "role": "engineer", "display": "Priyanto", "enabled": False},
+    "neal.hotama":    {"password": "Tg5zXw1kMrD0qVjH", "role": "engineer", "display": "Neal Hotama", "enabled": True},
+    "nazran.hisyami":{"password": "Wy2nLf6uBsC9eKoP", "role": "engineer", "display": "Nazran Hisyami", "enabled": True},
+    "Andre.Bastian":  {"password": "Andre#2026!Xq7Lm9", "role": "engineer", "display": "Andre Bastian", "enabled": True},
 }
 
 @app.route("/api/auth/login", methods=["POST"])
@@ -569,7 +570,7 @@ def auth_login():
     username = data.get("username", "").strip()
     password = data.get("password", "")
     user     = USERS.get(username)
-    if not user or user["password"] != password:
+    if not user or not user.get("enabled", True) or user["password"] != password:
         return jsonify({"ok": False, "error": "Invalid username or password"}), 401
     return jsonify({
         "ok":      True,
@@ -628,22 +629,40 @@ def get_activity():
 @app.route("/api/activity", methods=["POST"])
 def post_activity():
     data = request.json or {}
+    entry = _record_activity(
+        username=data.get("username", "unknown"),
+        display=data.get("display", "Unknown"),
+        action=data.get("action", ""),
+        category=data.get("category", "general"),
+        detail=data.get("detail", ""),
+    )
+    return jsonify({"ok": True, "id": entry["id"]})
+
+def _record_activity(username, display, action, category="task", detail=""):
+    """Tulis satu entry activity log dari SISI SERVER.
+
+    Dipanggil langsung oleh endpoint /api/tasks (create/update/delete/
+    request-delete/approve-delete) agar setiap mutasi task SELALU
+    tercatat di activity_log.json — tidak lagi bergantung pada frontend
+    berhasil memanggil logActivity() lewat request kedua yang terpisah
+    (yang bisa gagal diam-diam kalau network/tab ditutup di tengah jalan).
+    """
     logs = _load_activity()
     entry = {
         "id":       f"{datetime.utcnow().strftime('%Y%m%d%H%M%S%f')}",
         "ts":       datetime.utcnow().isoformat() + "Z",
         "date":     datetime.utcnow().strftime("%Y-%m-%d"),
-        "username": data.get("username", "unknown"),
-        "display":  data.get("display",  "Unknown"),
-        "action":   data.get("action",   ""),
-        "category": data.get("category", "general"),
-        "detail":   data.get("detail",   ""),
+        "username": username or "unknown",
+        "display":  display or "Unknown",
+        "action":   action or "",
+        "category": category or "task",
+        "detail":   detail or "",
     }
     logs.append(entry)
     if len(logs) > 5000:
         logs = logs[-5000:]
     _save_activity(logs)
-    return jsonify({"ok": True, "id": entry["id"]})
+    return entry
 
 
 # ══════════════════════════════════════════════════════════
@@ -794,30 +813,81 @@ def create_task():
     }
     tasks.insert(0, new_task)
     _save_tasks(tasks)
+
+    # ── Server-side activity log — SATU-SATUNYA sumber kebenaran ────
+    # Dicatat di sini (bukan dari frontend via request terpisah) agar
+    # setiap task yang dibuat — termasuk auto-create dari alert sync
+    # yang tidak melewati UI manusia — SELALU tercatat, tanpa
+    # tergantung frontend berhasil memanggil /api/activity kedua kalinya.
+    by_username = (data.get("_by") or data.get("pic") or "system").strip() or "system"
+    by_display  = (data.get("_byDisplay") or data.get("pic") or "System").strip() or "System"
+    # Frontend boleh kirim label lebih deskriptif (misal "Dismiss Alert")
+    # lewat _action/_detail; kalau tidak dikirim, pakai default "Create Task".
+    _record_activity(
+        username=by_username,
+        display=by_display,
+        action=data.get("_action") or "Create Task",
+        category="task",
+        detail=data.get("_detail") or f"[{new_task['customer']}] {new_task['description']}",
+    )
     return jsonify(new_task), 201
 
 @app.route("/api/tasks/<task_id>", methods=["PUT"])
 def update_task(task_id):
     data  = request.json or {}
     tasks = _load_tasks()
+    before  = None
     updated = None
     for i, t in enumerate(tasks):
         if t.get("id") == task_id:
+            before   = t
             tasks[i] = {**t, **data, "id": task_id}
             updated  = tasks[i]
             break
     if not updated:
         return jsonify({"error": "Task not found"}), 404
     _save_tasks(tasks)
+
+    # ── Server-side activity log — SATU-SATUNYA sumber kebenaran ────
+    # Setiap PUT tercatat, apa pun field yang berubah (status, PIC,
+    # atau edit field lain) dan siapa pun pemanggilnya (klik manual
+    # engineer ATAU auto-sync alert). Ini menutup semua celah yang
+    # sebelumnya bergantung pada frontend memanggil logActivity()
+    # secara terpisah dan bisa gagal diam-diam.
+    by_username = (data.get("_by") or updated.get("pic") or "system").strip() or "system"
+    by_display  = (data.get("_byDisplay") or updated.get("pic") or "System").strip() or "System"
+    desc = updated.get("description", task_id)
+    # Frontend boleh kirim label lebih deskriptif lewat _action/_detail
+    # (misal "Dismiss Alert"); kalau tidak dikirim, pakai default
+    # berdasarkan field apa yang berubah.
+    if data.get("_action"):
+        _record_activity(by_username, by_display, data["_action"], "task",
+                          data.get("_detail") or desc)
+    elif "status" in data and data["status"] != before.get("status"):
+        _record_activity(by_username, by_display, "Update Task Status", "task",
+                          f"{desc} → {data['status']}")
+    elif "pic" in data and data["pic"] != before.get("pic"):
+        _record_activity(by_username, by_display, "Assign Task", "task",
+                          f"{desc} → PIC: {data['pic']}")
+    else:
+        _record_activity(by_username, by_display, "Edit Task", "task", desc)
     return jsonify(updated)
 
 @app.route("/api/tasks/<task_id>", methods=["DELETE"])
 def delete_task(task_id):
+    data  = request.json or {}
     tasks = _load_tasks()
+    task  = next((t for t in tasks if t.get("id") == task_id), None)
     new   = [t for t in tasks if t.get("id") != task_id]
     if len(new) == len(tasks):
         return jsonify({"error": "Task not found"}), 404
     _save_tasks(new)
+
+    by_username = (data.get("_by") or "system").strip() or "system"
+    by_display  = (data.get("_byDisplay") or "System").strip() or "System"
+    desc = (task or {}).get("description", task_id)
+    _record_activity(by_username, by_display, "Delete Task", "task",
+                      f"{desc} ({(task or {}).get('taskNo','')})")
     return jsonify({"ok": True})
 
 
@@ -897,15 +967,19 @@ def request_delete(task_id):
     # Avoid duplicate
     if any(r.get("task_id") == task_id for r in reqs):
         return jsonify({"ok": True, "status": "already_requested"})
+    username = data.get("username", "unknown")
+    display  = data.get("display", username)
     reqs.append({
         "task_id":     task_id,
         "task_desc":   task.get("description", ""),
         "task_no":     task.get("taskNo", ""),
-        "requested_by": data.get("display", data.get("username", "unknown")),
-        "username":    data.get("username", "unknown"),
+        "requested_by": display,
+        "username":    username,
         "requested_at": datetime.utcnow().isoformat() + "Z",
     })
     _save_delete_reqs(reqs)
+    _record_activity(username, display, "Request Delete Task", "task",
+                      f"{task.get('description','')} ({task.get('taskNo','')})")
     return jsonify({"ok": True, "status": "requested"})
 
 @app.route("/api/tasks/<task_id>/approve-delete", methods=["POST"])
@@ -913,6 +987,7 @@ def approve_delete(task_id):
     data   = request.json or {}
     action = data.get("action", "approve")  # "approve" | "reject"
     reqs   = _load_delete_reqs()
+    req    = next((r for r in reqs if r.get("task_id") == task_id), None)
     new_reqs = [r for r in reqs if r.get("task_id") != task_id]
     _save_delete_reqs(new_reqs)
     if action == "approve":
@@ -924,6 +999,11 @@ def approve_delete(task_id):
             _json.dump(new, f, ensure_ascii=False, indent=2)
             f.flush(); os.fsync(f.fileno())
         os.replace(tmp_path, TASKS_PATH)
+    by_username = (data.get("_by") or "admin").strip() or "admin"
+    by_display  = (data.get("_byDisplay") or "Admin").strip() or "Admin"
+    desc = (req or {}).get("task_desc", task_id)
+    label = "Approve Delete Task" if action == "approve" else "Reject Delete Task"
+    _record_activity(by_username, by_display, label, "task", desc)
     return jsonify({"ok": True, "action": action})
 
 

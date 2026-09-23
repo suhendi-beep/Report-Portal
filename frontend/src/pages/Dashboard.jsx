@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from "react";
+import OCILoginModal from "../components/OCILoginModal";
 
 function parseLog(line) {
   const ts = line.match(/\[(\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2})\]/);
@@ -80,6 +81,9 @@ export default function Dashboard({ customers, navigate, currentUser, darkMode, 
   const [apiOk,    setApiOk]    = useState(null);
   const [allFiles, setAllFiles] = useState([]);
   const [showUser, setShowUser] = useState(false);
+  const [ociConnected, setOciConnected] = useState(false);
+  const [ociModal, setOciModal] = useState(false);
+  const [ociInfo, setOciInfo] = useState(null);
   const [runMap,   setRunMap]   = useState({});
   const [taskMap,  setTaskMap]  = useState({});
   const [alertCount, setAlertCount] = useState(null);
@@ -200,31 +204,73 @@ export default function Dashboard({ customers, navigate, currentUser, darkMode, 
     return () => clearInterval(iv);
   }, [fetchTasks]);
 
-  const todayStr = new Date().toISOString().slice(0,10);
+  // ── Engineer Activity log (sumber kebenaran untuk total task/ticket) ──
+  // Sama seperti EngineerActivity.jsx: "Tasks Closed" dihitung dari activity
+  // log ("Update Task Status" → detail mengandung "→ Close"), bukan dari
+  // raw daily_tasks.json (yang bisa menumpuk record Pending/Review/dummy).
+  const [activityLogs, setActivityLogs] = React.useState([]);
+
+  const fetchActivity = React.useCallback(() => {
+    fetch("/api/activity")
+      .then(r => r.json())
+      .then(data => { if (Array.isArray(data)) setActivityLogs(data); })
+      .catch(() => {});
+  }, []);
+
+  React.useEffect(() => {
+    fetchActivity();
+    const iv = setInterval(fetchActivity, 30000); // refresh tiap 30 detik
+    return () => clearInterval(iv);
+  }, [fetchActivity]);
+
+  const todayStr = new Date().toLocaleString("en-CA", {timeZone:"Asia/Jakarta", year:"numeric", month:"2-digit", day:"2-digit"}).split(",")[0];
   const thisMonth = new Date().getMonth();
   const thisYear  = new Date().getFullYear();
 
-  // Task stats (semua task, bukan hanya alert)
-  const tasksDone    = alertTasks.filter(t => t.status==="Close").length;
-  const tasksInProg  = alertTasks.filter(t => t.status==="In Progress").length;
-  const tasksPending = alertTasks.filter(t => t.status==="Pending").length;
-  const tasksOverdue = alertTasks.filter(t => t.status==="Cancelled").length;
-  const totalTasks   = alertTasks.length;
-  const todayTasks   = alertTasks.filter(t => (t.date||"").slice(0,10) === todayStr).length;
+  // Breakdown In Progress/Pending/Overdue — dari raw daily_tasks.json.
+  // Transisi ke status ini belum tercatat di activity log, jadi tetap
+  // dari sumber ini (tidak ada alternatif lain).
+  const tasksInProg    = alertTasks.filter(t => t.status==="In Progress").length;
+  const tasksPending   = alertTasks.filter(t => t.status==="Pending").length;
+  const tasksOverdue   = alertTasks.filter(t => t.status==="Cancelled").length;
+  const todayTasks     = alertTasks.filter(t => (t.date||"").slice(0,10) === todayStr).length;
 
-  // ── Alert ticket stats (hanya task yang berasal dari alert, prefix [ALERT]) ──
-  const alertOnlyTasks = alertTasks.filter(t => (t.description||"").startsWith("[ALERT]"));
-  const ticketCloseHarian  = alertOnlyTasks.filter(t =>
-    t.status === "Close" && (t.date||"").slice(0,10) === todayStr
-  ).length;
-  const ticketCloseBulanan = alertOnlyTasks.filter(t => {
-    if (t.status !== "Close") return false;
-    const d = new Date(t.date || t.createdAt || "");
+  // ── Task Closed — dihitung dari Engineer Activity log (sumber kebenaran) ──
+  // Sesuai permintaan: total task/ticket dashboard harus sinkron dengan
+  // Engineer Activity ("Update Task Status" → detail mengandung "→ Close"),
+  // bukan raw count dari daily_tasks.json (yang bisa menumpuk record
+  // Pending/Review/dummy dan membuat totalnya salah, misal 4000+). Karena
+  // app baru berjalan bulan ini, angka ini juga merepresentasikan total
+  // bulan ini secara praktis.
+  const taskCloseLogs = activityLogs.filter(l =>
+    l.category === "task" && l.action === "Update Task Status" && (l.detail || "").includes("→ Close")
+  );
+  const tasksDone  = taskCloseLogs.length;
+  const totalTasks = tasksDone; // "Daily Tasks" kartu = total ticket closed (data asli, sesuai Engineer Activity)
+  const tasksDoneToday = taskCloseLogs.filter(l => l.date === todayStr).length;
+  const tasksDoneMonth = taskCloseLogs.filter(l => {
+    const d = new Date(l.date || l.ts || "");
     return d.getMonth() === thisMonth && d.getFullYear() === thisYear;
   }).length;
-  const alertHarian  = alertOnlyTasks.filter(t => (t.date||"").slice(0,10) === todayStr).length;
-  const alertBulanan = alertOnlyTasks.filter(t => {
-    const d = new Date(t.date || t.createdAt || "");
+
+  // Total gabungan untuk donut "TASK OVERVIEW": Close (dari activity log)
+  // + In Progress/Pending/Overdue (dari raw daily_tasks.json).
+  const taskOverviewTotal = tasksDone + tasksInProg + tasksPending + tasksOverdue;
+
+  // ── Alert ticket stats (hanya task yang berasal dari alert, prefix [ALERT]) ──
+  // Ticket Close harian/bulanan — dari Engineer Activity log (sumber kebenaran),
+  // bukan dari raw daily_tasks.json.
+  const ticketCloseHarian  = tasksDoneToday;
+  const ticketCloseBulanan = tasksDoneMonth;
+
+  // Alert harian/bulanan — dihitung dari activity log kategori "alert"
+  // (action "Report Alert" / "Laporkan Alert"), konsisten dengan sumber
+  // Engineer Activity. App baru berjalan bulan ini jadi "bulanan" di sini
+  // pada praktiknya sama dengan total sepanjang berjalannya app.
+  const alertActivityLogs = activityLogs.filter(l => l.category === "alert");
+  const alertHarian  = alertActivityLogs.filter(l => l.date === todayStr).length;
+  const alertBulanan = alertActivityLogs.filter(l => {
+    const d = new Date(l.date || l.ts || "");
     return d.getMonth() === thisMonth && d.getFullYear() === thisYear;
   }).length;
 
@@ -383,8 +429,8 @@ export default function Dashboard({ customers, navigate, currentUser, darkMode, 
             {
               icon:"✅", label:"Daily Tasks",
               val: totalTasks,
-              sub: `${tasksDone} done · ${tasksInProg} in progress · ${todayTasks} today`,
-              trend: `${tasksDone} completed`,
+              sub: `Hari ini: ${tasksDoneToday} · Bulan ini: ${tasksDoneMonth}`,
+              trend: `${tasksDone} ticket closed (Engineer Activity)`,
               c:"#3B82F6", bg:"rgba(59,130,246,.12)", bd:"rgba(59,130,246,.28)",
               onClick: ()=>navigate("daily-task"),
             },
@@ -488,21 +534,24 @@ export default function Dashboard({ customers, navigate, currentUser, darkMode, 
             </div>
           </div>
 
-          {/* Task Overview donut */}
+          {/* Task Overview donut — "Close" disesuaikan dari Engineer Activity log
+              (sumber kebenaran, sama dengan kartu KPI "Daily Tasks"). Breakdown
+              In Progress/Pending/Overdue tetap dari daily_tasks.json karena
+              transisi status tersebut belum tercatat di activity log. */}
           <div style={{...D.donutCard, background:T.bg2, borderColor:T.border}}>
             <div style={D.cardHead}>
               <div style={D.cardTitle}>TASK OVERVIEW</div>
-              <span style={{fontSize:10,color:"var(--muted2)"}}>{totalTasks} total tasks</span>
+              <span style={{fontSize:10,color:"var(--muted2)"}}>{taskOverviewTotal} total tasks</span>
             </div>
             <div style={{display:"flex",alignItems:"center",gap:16}}>
               <DonutChart completed={tasksDone} inProgress={tasksInProg}
                 pending={tasksPending} overdue={tasksOverdue}/>
               <div style={{flex:1,display:"flex",flexDirection:"column",gap:8}}>
                 {[
-                  {label:"Close",      val:tasksDone,   c:"#B11226",  pct:totalTasks?Math.round(tasksDone/totalTasks*100):0},
-                  {label:"In Progress",val:tasksInProg, c:"#F59E0B",  pct:totalTasks?Math.round(tasksInProg/totalTasks*100):0},
-                  {label:"Pending",    val:tasksPending,c:"#3B82F6",  pct:totalTasks?Math.round(tasksPending/totalTasks*100):0},
-                  {label:"Overdue",    val:tasksOverdue,c:"#EF4444",  pct:totalTasks?Math.round(tasksOverdue/totalTasks*100):0},
+                  {label:"Close",      val:tasksDone,   c:"#B11226",  pct:taskOverviewTotal?Math.round(tasksDone/taskOverviewTotal*100):0},
+                  {label:"In Progress",val:tasksInProg, c:"#F59E0B",  pct:taskOverviewTotal?Math.round(tasksInProg/taskOverviewTotal*100):0},
+                  {label:"Pending",    val:tasksPending,c:"#3B82F6",  pct:taskOverviewTotal?Math.round(tasksPending/taskOverviewTotal*100):0},
+                  {label:"Overdue",    val:tasksOverdue,c:"#EF4444",  pct:taskOverviewTotal?Math.round(tasksOverdue/taskOverviewTotal*100):0},
                 ].map((s,i)=>(
                   <div key={i} style={{display:"flex",alignItems:"center",gap:8}}>
                     <span style={{width:8,height:8,borderRadius:"50%",background:s.c,flexShrink:0}}/>
@@ -942,6 +991,51 @@ export default function Dashboard({ customers, navigate, currentUser, darkMode, 
         </div>
 
       </div>
+
+
+      {/* OCI Connection Status */}
+      <div style={{
+        position: 'fixed',
+        bottom: 60,
+        left: 20,
+        zIndex: 100,
+      }}>
+        <button
+          style={{
+            background: ociConnected ? '#059669' : '#EF4444',
+            color: '#fff',
+            border: 'none',
+            padding: '10px 16px',
+            borderRadius: 8,
+            cursor: 'pointer',
+            fontSize: 12,
+            fontWeight: 600,
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+            boxShadow: '0 4px 12px rgba(0,0,0,0.3)',
+          }}
+          onClick={() => !ociConnected && setOciModal(true)}
+        >
+          <span>{ociConnected ? '✓' : '⚠'}</span>
+          <div style={{ display: 'flex', flexDirection: 'column', alignItems: 'flex-start' }}>
+            <span style={{ fontSize: 10 }}>OCI Session</span>
+            <span style={{ fontSize: 11, fontWeight: 700 }}>
+              {ociConnected ? 'Connected' : 'Not Connected'}
+            </span>
+          </div>
+        </button>
+      </div>
+
+      {ociModal && (
+        <OCILoginModal
+          onClose={() => setOciModal(false)}
+          onSuccess={() => {
+            fetchOciStatus();
+            setTimeout(() => { refresh(); fetchFiles(); }, 1000);
+          }}
+        />
+      )}
 
       {/* ── FOOTER ── */}
       <div style={D.footer}>
