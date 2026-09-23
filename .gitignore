@@ -3,6 +3,7 @@
 oci_config/
 *.bak
 *.before-*
+*.before_*
 backup-*/
 node_modules/
 dist/
@@ -13,3 +14,21 @@ shared/*
 
 *.bak-*
 *.bak_*
+
+# Ad-hoc manual backup files created directly on the server before an
+# edit (app.py.backup, app.py.backup-20260914-..., app.py.broken-...,
+# etc). Real history now lives in git commits — these are no longer
+# needed to be tracked and should not accumulate in the repo.
+*.backup
+*.backup-*
+*.backup_*
+*.broken
+*.broken-*
+*.final-backup-*
+*.FROM-CONTAINER-*
+*.step1
+*.step2
+*.step3
+*.minimal.jsx
+*.tmp
+shared.backup-*/

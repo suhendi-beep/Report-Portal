@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>OCI Cookie Helper</title>
+    <style>
+        body { font-family: Arial; max-width: 800px; margin: 50px auto; padding: 20px; }
+        button { padding: 15px 30px; font-size: 16px; background: #e74c3c; color: white; border: none; border-radius: 5px; cursor: pointer; }
+        button:hover { background: #c0392b; }
+        .success { color: green; font-weight: bold; margin-top: 20px; }
+        .error { color: red; font-weight: bold; margin-top: 20px; }
+        .step { background: #f8f9fa; padding: 15px; margin: 10px 0; border-left: 4px solid #3498db; }
+    </style>
+</head>
+<body>
+    <h1>?? OCI Cookie Setup (SEKALI DOANG)</h1>
+    
+    <div class="step">
+        <h3>Step 1: Login OCI Manual</h3>
+        <p>1. Buka tab baru: <a href="https://cloud.oracle.com" target="_blank">https://cloud.oracle.com</a></p>
+        <p>2. Login dengan OTP manual (sekali aja)</p>
+        <p>3. Tunggu sampai masuk Console</p>
+        <p>4. JANGAN TUTUP TAB OCI - balik ke sini</p>
+    </div>
+    
+    <div class="step">
+        <h3>Step 2: Save Cookies</h3>
+        <p>Klik tombol di bawah (auto-ambil cookies dari tab OCI):</p>
+        <button onclick="saveCookies()">?? SAVE OCI COOKIES</button>
+        <div id="result"></div>
+    </div>
+    
+    <div class="step">
+        <h3>Step 3: Done!</h3>
+        <p>? Weekly OCI Backup sekarang jalan TANPA OTP (14 hari)</p>
+        <p>? Semua user bisa trigger automation tanpa ribet</p>
+    </div>
+
+    <script>
+        async function saveCookies() {
+            const result = document.getElementById('result');
+            result.innerHTML = 'Loading...';
+            
+            try {
+                // Get all cookies
+                const cookies = document.cookie.split('; ').map(c => {
+                    const [name, ...valueParts] = c.split('=');
+                    return {
+                        name: name,
+                        value: valueParts.join('='),
+                        domain: '.oraclecloud.com',
+                        path: '/'
+                    };
+                });
+                
+                // Send to backend
+                const response = await fetch('/api/oci/save-cookies', {
+                    method: 'POST',
+                    headers: {'Content-Type': 'application/json'},
+                    body: JSON.stringify({cookies})
+                });
+                
+                const data = await response.json();
+                
+                if (data.status === 'success') {
+                    result.innerHTML = `<div class="success">? SUCCESS! ${data.count} cookies saved. Automation sekarang bisa jalan tanpa OTP!</div>`;
+                } else {
+                    result.innerHTML = `<div class="error">? Error: ${data.error}</div>`;
+                }
+            } catch (e) {
+                result.innerHTML = `<div class="error">? Error: ${e.message}<br><br>Pastikan lo sudah login OCI di tab lain!</div>`;
+            }
+        }
+    </script>
+</body>
+</html>
