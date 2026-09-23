@@ -12,6 +12,7 @@ from io import BytesIO
 from PIL import Image
 from docx import Document
 from docx.shared import Inches
+from selenium.common.exceptions import TimeoutException, WebDriverException
 from selenium.webdriver.support.ui import WebDriverWait
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -80,34 +81,48 @@ def run(log_path=None, args=None, driver=None):
         log("Session valid, starting capture...")
 
         for name, url in URL_LIST:
-            log(f"Opening: {name.split(chr(10))[1] if chr(10) in name else name}")
-            driver.get(url)
-            wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
-            
-            # Optimized wait time (reduced from 8s to 3s)
-            time.sleep(3)
-            driver.execute_script("window.scrollTo(0,300)")
-            
-            # Optimized wait time (reduced from 5s to 2s)
-            time.sleep(2)
+            short_name = name.split(chr(10))[1] if chr(10) in name else name
+            log(f"Opening: {short_name}")
+            try:
+                # driver.set_page_load_timeout(45) di chrome_helper.py
+                # membatasi driver.get() supaya tidak hang tanpa akhir
+                # kalau halaman (terutama halaman database yang punya
+                # widget/chart terus-menerus polling) tidak pernah
+                # mencapai "load" event.
+                driver.get(url)
+                wait.until(lambda d: d.execute_script("return document.readyState") == "complete")
 
-            png   = driver.get_screenshot_as_png()
-            image = Image.open(io.BytesIO(png))
-            w, h  = image.size
+                # Optimized wait time (reduced from 8s to 3s)
+                time.sleep(3)
+                driver.execute_script("window.scrollTo(0,300)")
 
-            # Auto crop based on layout
-            left_crop   = 200 if "dbaas" in url.lower() else 30
-            top_crop    = 80
-            right_crop  = max(w - 20, left_crop + 1)
-            bottom_crop = max(h - 90, top_crop + 1)
+                # Optimized wait time (reduced from 5s to 2s)
+                time.sleep(2)
 
-            cropped = image.crop((left_crop, top_crop, right_crop, bottom_crop))
-            stream  = BytesIO()
-            cropped.save(stream, format="PNG")
-            stream.seek(0)
-            saved_files.append((name, stream))
-            
-            log(f"Captured: {name.split(chr(10))[1] if chr(10) in name else name}")
+                png   = driver.get_screenshot_as_png()
+                image = Image.open(io.BytesIO(png))
+                w, h  = image.size
+
+                # Auto crop based on layout
+                left_crop   = 200 if "dbaas" in url.lower() else 30
+                top_crop    = 80
+                right_crop  = max(w - 20, left_crop + 1)
+                bottom_crop = max(h - 90, top_crop + 1)
+
+                cropped = image.crop((left_crop, top_crop, right_crop, bottom_crop))
+                stream  = BytesIO()
+                cropped.save(stream, format="PNG")
+                stream.seek(0)
+                saved_files.append((name, stream))
+
+                log(f"Captured: {short_name}")
+            except (TimeoutException, WebDriverException) as e:
+                # Satu resource lambat/error tidak boleh menggagalkan
+                # seluruh report — lewati dan lanjut ke resource
+                # berikutnya, supaya resource lain yang berhasil tetap
+                # masuk ke laporan akhir.
+                log(f"SKIPPED (timeout/error): {short_name} — {type(e).__name__}: {str(e)[:150]}")
+                continue
 
     finally:
         # Driver akan di-quit oleh celery_worker

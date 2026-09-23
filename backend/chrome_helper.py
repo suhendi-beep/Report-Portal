@@ -26,6 +26,14 @@ def get_driver(width=2560, height=1440, headless=True):
     options.binary_location = "/usr/bin/chromium"
     service = Service("/usr/bin/chromedriver")
     driver = webdriver.Chrome(service=service, options=options)
+    # Tanpa batas ini, driver.get(url) bisa menunggu tanpa akhir kalau
+    # halaman punya widget/chart yang terus-menerus polling (misal halaman
+    # database di OCI Console) dan tidak pernah benar-benar mencapai
+    # "load" event. Default Selenium page load timeout terlalu longgar
+    # (bisa 300s+) — 45s cukup untuk halaman normal tapi tetap gagal cepat
+    # kalau memang macet, supaya loop di atas (backup scripts) bisa
+    # menangkap exception dan lanjut ke resource berikutnya alih-alih hang.
+    driver.set_page_load_timeout(45)
     driver.execute_cdp_cmd("Page.addScriptToEvaluateOnNewDocument", {
         "source": """
             Object.defineProperty(navigator, 'webdriver', {get: () => undefined});
