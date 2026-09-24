@@ -1,8 +1,79 @@
 from flask import Flask, jsonify, request
 from flask_cors import CORS
-import os, glob
-from datetime import datetime
+import os, glob, fcntl, json as _json_top
+from datetime import datetime, timedelta
 import oci_session
+
+# Retensi data: 30 hari. Dipakai untuk daily_tasks.json dan
+# activity_log.json supaya file tidak tumbuh tanpa batas, tapi juga
+# tidak lagi di-reset total ke 0 seperti yang terjadi sebelumnya —
+# hanya baris yang benar-benar lebih tua dari 30 hari yang dibuang,
+# per hari, secara bertahap.
+RETENTION_DELTA = timedelta(days=30)
+
+# ══════════════════════════════════════════════════════════
+#  FILE LOCKING — mencegah race condition saat write bersamaan
+# ══════════════════════════════════════════════════════════
+# Root cause insiden "task/ticket reset ke 0" (24 Sep 2026): dua request
+# menulis ke daily_tasks.json secara bersamaan tanpa locking, salah satu
+# menimpa yang lain di tengah proses os.replace(), menghasilkan file JSON
+# corrupt (string terpotong di tengah). Begitu corrupt, /api/tasks return
+# 500, dan Generate Report (yang POST /api/tasks di awal) ikut gagal.
+#
+# Fix: setiap read-modify-write terhadap file JSON shared (daily_tasks,
+# activity_log, alert_eskalasi, delete_requests) sekarang dibungkus lock
+# file terpisah (`<path>.lock`) memakai fcntl.flock — exclusive lock,
+# blocking, jadi request lain menunggu gilirannya alih-alih saling
+# menimpa. Ini flask app single-process, tapi threaded=True (default
+# Flask modern) membuat race condition antar-thread tetap mungkin;
+# fcntl.flock aman untuk itu.
+def _locked_json_update(path, mutate_fn, default_value):
+    """Baca file JSON di `path` (pakai `default_value` kalau belum ada),
+    panggil `mutate_fn(data) -> new_data`, lalu tulis `new_data` balik —
+    semuanya di bawah exclusive file lock supaya atomic terhadap request
+    lain yang melakukan hal serupa secara bersamaan.
+    """
+    lock_path = path + ".lock"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(lock_path, "w") as lockfile:
+        fcntl.flock(lockfile, fcntl.LOCK_EX)
+        try:
+            if os.path.exists(path):
+                with open(path, "r", encoding="utf-8") as f:
+                    data = _json_top.load(f)
+            else:
+                data = default_value
+            new_data = mutate_fn(data)
+            tmp = path + ".tmp"
+            with open(tmp, "w", encoding="utf-8") as f:
+                _json_top.dump(new_data, f, ensure_ascii=False, indent=2)
+                f.flush()
+                os.fsync(f.fileno())
+            os.replace(tmp, path)
+            return new_data
+        finally:
+            fcntl.flock(lockfile, fcntl.LOCK_UN)
+
+import contextlib
+
+@contextlib.contextmanager
+def _file_lock(path):
+    """Context manager exclusive lock untuk membungkus critical section
+    multi-langkah (baca -> validasi/dedup -> tulis) yang tidak cocok
+    dengan _locked_json_update generik di atas — misal create_task yang
+    perlu return early di tengah proses (dedup alert, rate-limit) sebelum
+    sampai ke tahap tulis. Dipakai bersama _load_tasks()/_save_tasks()
+    yang sudah ada supaya perubahannya minimal.
+    """
+    lock_path = path + ".lock"
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    lockfile = open(lock_path, "w")
+    fcntl.flock(lockfile, fcntl.LOCK_EX)
+    try:
+        yield
+    finally:
+        fcntl.flock(lockfile, fcntl.LOCK_UN)
+        lockfile.close()
 
 # ── Load secrets before Celery imports and configures Redis ──
 from ssm_config import load_all_into_env
@@ -647,7 +718,6 @@ def _record_activity(username, display, action, category="task", detail=""):
     berhasil memanggil logActivity() lewat request kedua yang terpisah
     (yang bisa gagal diam-diam kalau network/tab ditutup di tengah jalan).
     """
-    logs = _load_activity()
     # "date" HARUS pakai waktu WIB (datetime.now(), container TZ sudah
     # Asia/Jakarta) — bukan UTC. Sebelumnya pakai datetime.utcnow() yang
     # membuat entry jam 00:00-06:59 WIB tercatat dengan tanggal "kemarin"
@@ -666,10 +736,16 @@ def _record_activity(username, display, action, category="task", detail=""):
         "category": category or "task",
         "detail":   detail or "",
     }
-    logs.append(entry)
-    if len(logs) > 5000:
-        logs = logs[-5000:]
-    _save_activity(logs)
+
+    def _append(logs):
+        logs.append(entry)
+        # Retensi 1 bulan: buang entry yang tanggalnya lebih tua dari 30
+        # hari, supaya file tidak tumbuh tanpa batas dan tetap konsisten
+        # dengan retensi daily_tasks.json.
+        cutoff = (now_wib - RETENTION_DELTA).strftime("%Y-%m-%d")
+        return [l for l in logs if (l.get("date") or "9999") >= cutoff]
+
+    _locked_json_update(ACTIVITY_LOG_PATH, _append, [])
     return entry
 
 
@@ -721,6 +797,12 @@ def _save_tasks(tasks):
         return obj
     tasks = _sanitize(tasks)
 
+    # Retensi 1 bulan: buang task yang tanggalnya lebih tua dari 30 hari.
+    # Task tanpa field "date" (jarang, biasanya task lama) tetap disimpan
+    # supaya tidak salah hapus data yang belum jelas umurnya.
+    cutoff = (datetime.now() - RETENTION_DELTA).strftime("%Y-%m-%d")
+    tasks = [t for t in tasks if not t.get("date") or t.get("date") >= cutoff]
+
     tmp_path = TASKS_PATH + ".tmp"
     with open(tmp_path, "w") as f:
         _json.dump(tasks, f, ensure_ascii=False, indent=2)
@@ -730,7 +812,13 @@ def _save_tasks(tasks):
 
 @app.route("/api/tasks", methods=["GET"])
 def get_tasks():
-    tasks = _load_tasks()
+    try:
+        tasks = _load_tasks()
+    except RuntimeError as e:
+        # Return JSON error yang jelas (bukan 500 HTML default Flask),
+        # supaya frontend bisa menampilkan pesan yang masuk akal alih-alih
+        # terlihat seperti "data reset ke 0" begitu saja.
+        return jsonify({"error": f"Gagal membaca data task: {e}"}), 500
     # Filter by date (exact) or month (YYYY-MM prefix)
     date_filter  = request.args.get("date",  "")
     month_filter = request.args.get("month", "")
@@ -755,7 +843,18 @@ def create_task():
     pic = (data.get("pic") or "").strip()
     is_generate_report = bool(data.get("generateReport"))
 
-    tasks = _load_tasks()
+    # Seluruh read-modify-write (dedup check, rate-limit, taskNo, insert,
+    # save) dibungkus 1 exclusive lock supaya tidak ada request lain yang
+    # membaca/menulis daily_tasks.json di tengah proses ini — inilah yang
+    # menyebabkan file corrupt sebelumnya ("task/ticket reset ke 0").
+    with _file_lock(TASKS_PATH):
+        return _create_task_locked(data, allowed_pics, pic, is_generate_report)
+
+def _create_task_locked(data, allowed_pics, pic, is_generate_report):
+    try:
+        tasks = _load_tasks()
+    except RuntimeError as e:
+        return jsonify({"error": f"Gagal membaca data task: {e}"}), 500
 
     # ── Guard: rate-limit pembuatan task ───────────────────────────
     # Mencegah insiden seperti sebelumnya (dummy/test generator loop
@@ -869,8 +968,15 @@ def create_task():
 
 @app.route("/api/tasks/<task_id>", methods=["PUT"])
 def update_task(task_id):
-    data  = request.json or {}
-    tasks = _load_tasks()
+    data = request.json or {}
+    with _file_lock(TASKS_PATH):
+        return _update_task_locked(task_id, data)
+
+def _update_task_locked(task_id, data):
+    try:
+        tasks = _load_tasks()
+    except RuntimeError as e:
+        return jsonify({"error": f"Gagal membaca data task: {e}"}), 500
     before  = None
     updated = None
     for i, t in enumerate(tasks):
@@ -910,8 +1016,15 @@ def update_task(task_id):
 
 @app.route("/api/tasks/<task_id>", methods=["DELETE"])
 def delete_task(task_id):
-    data  = request.json or {}
-    tasks = _load_tasks()
+    data = request.json or {}
+    with _file_lock(TASKS_PATH):
+        return _delete_task_locked(task_id, data)
+
+def _delete_task_locked(task_id, data):
+    try:
+        tasks = _load_tasks()
+    except RuntimeError as e:
+        return jsonify({"error": f"Gagal membaca data task: {e}"}), 500
     task  = next((t for t in tasks if t.get("id") == task_id), None)
     new   = [t for t in tasks if t.get("id") != task_id]
     if len(new) == len(tasks):
@@ -960,12 +1073,13 @@ def mark_eskalasi():
     key  = data.get("key", "").strip()
     if not key:
         return jsonify({"error": "key diperlukan"}), 400
-    store = _load_eskalasi()
-    store[key] = {
-        "by": data.get("by", ""),
-        "at": datetime.utcnow().isoformat() + "Z",
-    }
-    _save_eskalasi(store)
+    with _file_lock(ESKALASI_PATH):
+        store = _load_eskalasi()
+        store[key] = {
+            "by": data.get("by", ""),
+            "at": datetime.utcnow().isoformat() + "Z",
+        }
+        _save_eskalasi(store)
     return jsonify({"ok": True, "key": key})
 
 
@@ -993,26 +1107,30 @@ def pending_deletes():
 
 @app.route("/api/tasks/<task_id>/request-delete", methods=["POST"])
 def request_delete(task_id):
-    data   = request.json or {}
-    tasks  = _load_tasks()
-    task   = next((t for t in tasks if t.get("id") == task_id), None)
-    if not task:
-        return jsonify({"error": "Task not found"}), 404
-    reqs   = _load_delete_reqs()
-    # Avoid duplicate
-    if any(r.get("task_id") == task_id for r in reqs):
-        return jsonify({"ok": True, "status": "already_requested"})
-    username = data.get("username", "unknown")
-    display  = data.get("display", username)
-    reqs.append({
-        "task_id":     task_id,
-        "task_desc":   task.get("description", ""),
-        "task_no":     task.get("taskNo", ""),
-        "requested_by": display,
-        "username":    username,
-        "requested_at": datetime.utcnow().isoformat() + "Z",
-    })
-    _save_delete_reqs(reqs)
+    data = request.json or {}
+    with _file_lock(TASKS_PATH), _file_lock(DELETE_REQ_PATH):
+        try:
+            tasks = _load_tasks()
+        except RuntimeError as e:
+            return jsonify({"error": f"Gagal membaca data task: {e}"}), 500
+        task = next((t for t in tasks if t.get("id") == task_id), None)
+        if not task:
+            return jsonify({"error": "Task not found"}), 404
+        reqs = _load_delete_reqs()
+        # Avoid duplicate
+        if any(r.get("task_id") == task_id for r in reqs):
+            return jsonify({"ok": True, "status": "already_requested"})
+        username = data.get("username", "unknown")
+        display  = data.get("display", username)
+        reqs.append({
+            "task_id":     task_id,
+            "task_desc":   task.get("description", ""),
+            "task_no":     task.get("taskNo", ""),
+            "requested_by": display,
+            "username":    username,
+            "requested_at": datetime.utcnow().isoformat() + "Z",
+        })
+        _save_delete_reqs(reqs)
     _record_activity(username, display, "Request Delete Task", "task",
                       f"{task.get('description','')} ({task.get('taskNo','')})")
     return jsonify({"ok": True, "status": "requested"})
@@ -1021,19 +1139,21 @@ def request_delete(task_id):
 def approve_delete(task_id):
     data   = request.json or {}
     action = data.get("action", "approve")  # "approve" | "reject"
-    reqs   = _load_delete_reqs()
-    req    = next((r for r in reqs if r.get("task_id") == task_id), None)
-    new_reqs = [r for r in reqs if r.get("task_id") != task_id]
-    _save_delete_reqs(new_reqs)
-    if action == "approve":
-        tasks = _load_tasks()
-        new   = [t for t in tasks if t.get("id") != task_id]
-        # Bypass proteksi overwrite untuk delete satu task (penurunan kecil wajar)
-        tmp_path = TASKS_PATH + ".tmp"
-        with open(tmp_path, "w") as f:
-            _json.dump(new, f, ensure_ascii=False, indent=2)
-            f.flush(); os.fsync(f.fileno())
-        os.replace(tmp_path, TASKS_PATH)
+    with _file_lock(TASKS_PATH), _file_lock(DELETE_REQ_PATH):
+        reqs = _load_delete_reqs()
+        req  = next((r for r in reqs if r.get("task_id") == task_id), None)
+        new_reqs = [r for r in reqs if r.get("task_id") != task_id]
+        _save_delete_reqs(new_reqs)
+        if action == "approve":
+            try:
+                tasks = _load_tasks()
+            except RuntimeError as e:
+                return jsonify({"error": f"Gagal membaca data task: {e}"}), 500
+            new = [t for t in tasks if t.get("id") != task_id]
+            # Sekarang pakai _save_tasks() biasa (bukan bypass manual) —
+            # supaya sanitasi & retensi 1 bulan tetap konsisten diterapkan
+            # di setiap jalur yang menulis daily_tasks.json.
+            _save_tasks(new)
     by_username = (data.get("_by") or "admin").strip() or "admin"
     by_display  = (data.get("_byDisplay") or "Admin").strip() or "Admin"
     desc = (req or {}).get("task_desc", task_id)
